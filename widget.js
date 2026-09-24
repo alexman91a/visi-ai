@@ -7,11 +7,56 @@
     var model = "qwen3-harness8k:14b";
     var history = [];
 
+    function safeSnapshot(value, depth, seen) {
+      if (depth > 4) return "[MaxDepth]";
+      if (value === null || value === undefined) return value;
+      var t = typeof value;
+      if (t === "string") return value.length > 800 ? value.slice(0, 800) + "…" : value;
+      if (t === "number" || t === "boolean") return value;
+      if (t === "bigint") return String(value);
+      if (t === "function") return "[Function " + (value.name || "anonymous") + "]";
+      if (t !== "object") return String(value);
+
+      if (!seen) seen = [];
+      if (seen.indexOf(value) !== -1) return "[Circular]";
+      seen.push(value);
+
+      try {
+        if (value instanceof Element) {
+          return "[Element " + value.tagName + (value.id ? "#" + value.id : "") + "]";
+        }
+      } catch (_) {}
+
+      if (Array.isArray(value)) {
+        return value.slice(0, 25).map(function (x) {
+          return safeSnapshot(x, depth + 1, seen);
+        });
+      }
+
+      var out = {};
+      Object.keys(value).slice(0, 100).forEach(function (key) {
+        try {
+          out[key] = safeSnapshot(value[key], depth + 1, seen);
+        } catch (e) {
+          out[key] = "[Unreadable: " + e.message + "]";
+        }
+      });
+      return out;
+    }
+
+    var snapshot = {
+      capturedAt: new Date().toISOString(),
+      page: location.href,
+      renderTo: w && w.general ? w.general.renderTo : null,
+      topLevelKeys: w ? Object.keys(w) : [],
+      widget: safeSnapshot(w, 0, [])
+    };
+
     root.innerHTML =
       '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;background:#fff;border:1px solid #d9dde5;border-radius:14px;overflow:hidden;font-family:Arial,sans-serif;color:#111827">' +
         '<div style="padding:12px 14px;border-bottom:1px solid #eceff3;display:flex;align-items:center;justify-content:space-between;background:#fafbfc">' +
-          '<div><div style="font-size:15px;font-weight:700">VISI AI</div><div data-role="model" style="font-size:11px;color:#6b7280">' + model + '</div></div>' +
-          '<div data-role="status" style="font-size:11px;color:#9ca3af">Проверяю Ollama…</div>' +
+          '<div><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:11px;color:#6b7280">' + model + '</div></div>' +
+          '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
         '</div>' +
         '<div data-role="messages" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#fff"></div>' +
         '<div style="padding:10px;border-top:1px solid #eceff3;background:#fafbfc">' +
@@ -19,7 +64,7 @@
             '<textarea data-role="input" placeholder="Спроси о данных дашборда…" style="flex:1;resize:none;min-height:42px;max-height:120px;border:1px solid #cfd5df;border-radius:10px;padding:10px 12px;box-sizing:border-box;font:13px Arial;outline:none"></textarea>' +
             '<button data-role="send" style="height:42px;padding:0 16px;border:0;border-radius:10px;background:#111827;color:white;font-weight:700;cursor:pointer">Отправить</button>' +
           '</div>' +
-          '<div style="margin-top:6px;font-size:10px;color:#9ca3af">Локально через Ollama · данные не уходят в облако</div>' +
+          '<div style="margin-top:6px;font-size:10px;color:#9ca3af">Локально через Ollama · контекст сохраняется только на этом ПК</div>' +
         '</div>' +
       '</div>';
 
@@ -27,6 +72,7 @@
     var inputEl = root.querySelector('[data-role="input"]');
     var sendEl = root.querySelector('[data-role="send"]');
     var statusEl = root.querySelector('[data-role="status"]');
+    var contextEl = root.querySelector('[data-role="context"]');
 
     function addMessage(role, text) {
       var row = document.createElement("div");
@@ -70,7 +116,7 @@
           messages: [
             {
               role: "system",
-              content: "Ты локальный ИИ-помощник внутри BI-дашборда Visiology. Отвечай кратко и по делу. Пока анализируй только текст пользователя; данные дашборда будут подключены следующим этапом."
+              content: "Ты локальный ИИ-помощник внутри BI-дашборда Visiology. Отвечай кратко и по делу. Контекст виджета сейчас диагностируется локально."
             }
           ].concat(history)
         })
@@ -110,6 +156,22 @@
       e.stopPropagation();
     };
 
+    fetch(endpoint + "/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot)
+    })
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      contextEl.textContent = "Контекст Visiology считан";
+      contextEl.style.color = "#15803d";
+    })
+    .catch(function (e) {
+      contextEl.textContent = "Контекст: ошибка";
+      contextEl.style.color = "#b91c1c";
+      console.error("[visi-ai] inspect failed", e);
+    });
+
     fetch(endpoint + "/health", { cache: "no-store" })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -118,7 +180,7 @@
       .then(function (data) {
         statusEl.textContent = data.ok ? "Ollama подключена" : "Ollama недоступна";
         statusEl.style.color = data.ok ? "#15803d" : "#b91c1c";
-        addMessage("assistant", "Связь с локальной Ollama установлена. Напиши тестовый вопрос.");
+        addMessage("assistant", "Связь с локальной Ollama установлена.");
       })
       .catch(function (e) {
         statusEl.textContent = "Нет связи";

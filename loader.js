@@ -1,8 +1,9 @@
 (function () {
-  const URL = "https://alexman91a.github.io/visi-ai/widget.js?v=" + Date.now();
+  const URL = "https://cdn.jsdelivr.net/gh/alexman91a/visi-ai@main/widget.js?v=" + Date.now();
 
   const script = document.createElement("script");
   script.src = URL;
+  script.async = true;
 
   script.onload = function () {
     if (typeof window.visiAiRender === "function") {

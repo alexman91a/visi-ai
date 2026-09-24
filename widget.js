@@ -1,11 +1,11 @@
 (function () {
   window.visiAiRender = function (w) {
-    const root = document.getElementById(w.general.renderTo);
+    var root = document.getElementById(w.general.renderTo);
     if (!root) return;
 
     root.innerHTML = "";
 
-    const box = document.createElement("div");
+    var box = document.createElement("div");
     box.style.cssText = [
       "width:100%",
       "height:100%",
@@ -16,24 +16,26 @@
       "justify-content:center",
       "gap:8px",
       "font-family:Arial,sans-serif",
-      "background:#052e16",
+      "background:#14532d",
       "color:#fff",
       "border-radius:12px"
     ].join(";");
 
-    const title = document.createElement("div");
-    title.textContent = "VISI AI REMOTE UPDATE OK";
-    title.style.cssText = "font-size:20px;font-weight:700;letter-spacing:.04em";
+    var title = document.createElement("div");
+    title.textContent = "VISI AI GITHUB API OK";
+    title.style.cssText = "font-size:20px;font-weight:700";
 
-    const sub = document.createElement("div");
-    sub.textContent = "widget.js изменён через Git без правки Visiology";
-    sub.style.cssText = "font-size:13px;opacity:.78";
+    var sub = document.createElement("div");
+    sub.textContent = "Последний код получен напрямую из GitHub API";
+    sub.style.cssText = "font-size:13px;opacity:.8";
 
-    const stamp = document.createElement("div");
-    stamp.textContent = "build: 0.1.1";
-    stamp.style.cssText = "font-size:11px;opacity:.5";
+    var stamp = document.createElement("div");
+    stamp.textContent = "build: 0.1.2";
+    stamp.style.cssText = "font-size:11px;opacity:.55";
 
-    box.append(title, sub, stamp);
+    box.appendChild(title);
+    box.appendChild(sub);
+    box.appendChild(stamp);
     root.appendChild(box);
   };
 })();

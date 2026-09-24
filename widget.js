@@ -44,12 +44,27 @@
       return out;
     }
 
+    var primaryData = w && w.data ? w.data.primaryData : null;
+    var dashboardData = primaryData ? safeSnapshot(primaryData, 0, []) : null;
+    var dashboardDataJson = "{}";
+
+    try {
+      dashboardDataJson = JSON.stringify(dashboardData || {});
+      if (dashboardDataJson.length > 60000) {
+        dashboardDataJson = dashboardDataJson.slice(0, 60000) + "\n[TRUNCATED]";
+      }
+    } catch (e) {
+      dashboardDataJson = JSON.stringify({ error: "Не удалось сериализовать данные: " + e.message });
+    }
+
+    var rowCount = primaryData && Array.isArray(primaryData.items) ? primaryData.items.length : 0;
+
     var snapshot = {
       capturedAt: new Date().toISOString(),
       page: location.href,
       renderTo: w && w.general ? w.general.renderTo : null,
-      topLevelKeys: w ? Object.keys(w) : [],
-      widget: safeSnapshot(w, 0, [])
+      rowCount: rowCount,
+      primaryData: dashboardData
     };
 
     root.innerHTML =
@@ -116,7 +131,7 @@
           messages: [
             {
               role: "system",
-              content: "Ты локальный ИИ-помощник внутри BI-дашборда Visiology. Отвечай кратко и по делу. Контекст виджета сейчас диагностируется локально."
+              content: "Ты локальный ИИ-помощник внутри BI-дашборда Visiology. Отвечай кратко и по делу. Анализируй только данные, переданные ниже. Если данных недостаточно — прямо скажи об этом. ДАННЫЕ ВИДЖЕТА VISOLOGY:\n" + dashboardDataJson
             }
           ].concat(history)
         })
@@ -163,7 +178,7 @@
     })
     .then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
-      contextEl.textContent = "Контекст Visiology считан";
+      contextEl.textContent = "Данные подключены: " + rowCount + " строк";
       contextEl.style.color = "#15803d";
     })
     .catch(function (e) {

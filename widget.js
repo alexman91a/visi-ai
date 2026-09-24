@@ -73,6 +73,13 @@
           '<div><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:11px;color:#6b7280">' + model + '</div></div>' +
           '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
         '</div>' +
+        '<div style="padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
+            '<div style="font-size:12px;font-weight:700">Данные виджета</div>' +
+            '<div data-role="preview-count" style="font-size:10px;color:#9ca3af"></div>' +
+          '</div>' +
+          '<div data-role="preview" style="max-height:145px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
+        '</div>' +
         '<div data-role="messages" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#fff"></div>' +
         '<div style="padding:10px;border-top:1px solid #eceff3;background:#fafbfc">' +
           '<div style="display:flex;gap:8px;align-items:flex-end">' +
@@ -88,6 +95,72 @@
     var sendEl = root.querySelector('[data-role="send"]');
     var statusEl = root.querySelector('[data-role="status"]');
     var contextEl = root.querySelector('[data-role="context"]');
+    var previewEl = root.querySelector('[data-role="preview"]');
+    var previewCountEl = root.querySelector('[data-role="preview-count"]');
+
+    function firstValue(v) {
+      if (Array.isArray(v)) return v.length ? v[0] : "";
+      if (v === null || v === undefined) return "";
+      return v;
+    }
+
+    function rowPair(item) {
+      if (!item) return ["", ""];
+      var k = firstValue(item.formattedKeys);
+      var v = firstValue(item.formattedValues);
+      if (k === "" || k === undefined) k = firstValue(item.keys);
+      if (v === "" || v === undefined) v = firstValue(item.values);
+
+      if (typeof k === "object") {
+        try { k = JSON.stringify(k); } catch (_) { k = String(k); }
+      }
+      if (typeof v === "object") {
+        try { v = JSON.stringify(v); } catch (_) { v = String(v); }
+      }
+
+      return [String(k === undefined ? "" : k), String(v === undefined ? "" : v)];
+    }
+
+    function renderPreview() {
+      var items = primaryData && Array.isArray(primaryData.items) ? primaryData.items : [];
+      previewEl.innerHTML = "";
+      previewCountEl.textContent = rowCount + " строк · показаны первые " + Math.min(items.length, 8);
+
+      var head = document.createElement("div");
+      head.style.cssText = "display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:8px;padding:7px 9px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#6b7280";
+      var h1 = document.createElement("div");
+      h1.textContent = "Измерение";
+      var h2 = document.createElement("div");
+      h2.textContent = "Показатель";
+      head.appendChild(h1);
+      head.appendChild(h2);
+      previewEl.appendChild(head);
+
+      if (!items.length) {
+        var empty = document.createElement("div");
+        empty.textContent = "К виджету пока не подключены данные";
+        empty.style.cssText = "padding:12px;font-size:11px;color:#9ca3af";
+        previewEl.appendChild(empty);
+        return;
+      }
+
+      items.slice(0, 8).forEach(function (item, i) {
+        var pair = rowPair(item);
+        var row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:8px;padding:7px 9px;border-bottom:" + (i === Math.min(items.length,8)-1 ? "0" : "1px solid #eceff3") + ";font-size:11px";
+        var a = document.createElement("div");
+        a.textContent = pair[0] || "—";
+        a.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        var b = document.createElement("div");
+        b.textContent = pair[1] || "—";
+        b.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600";
+        row.appendChild(a);
+        row.appendChild(b);
+        previewEl.appendChild(row);
+      });
+    }
+
+    renderPreview();
 
     function addMessage(role, text) {
       var row = document.createElement("div");

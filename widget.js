@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.7.1";
+    var version = "0.7.2";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -15,6 +15,7 @@
     }
     var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
     var history = [];
+    var lastDiagnostic = null;
 
     function safeSnapshot(value, depth, seen) {
       if (depth > 4) return "[MaxDepth]";
@@ -81,6 +82,7 @@
         '<div style="padding:12px 14px;border-bottom:1px solid #eceff3;display:flex;align-items:center;justify-content:space-between;background:#fafbfc">' +
           '<div><div style="display:flex;align-items:center;gap:7px"><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:9px;font-weight:700;color:#6b7280;background:#eef2f7;border-radius:999px;padding:2px 6px">v' + version + '</div></div><div style="font-size:11px;color:#6b7280;margin-top:2px">' + model + '</div></div>' +
           '<div style="display:flex;align-items:center;gap:10px">' +
+            '<button data-role="diagnostics" style="height:30px;padding:0 9px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#6b7280;font-size:10px;font-weight:700;cursor:pointer">Копировать диагностику</button>' +
             '<button data-role="history-clear" style="height:30px;padding:0 9px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#6b7280;font-size:10px;font-weight:700;cursor:pointer">Очистить историю</button>' +
             '<button data-role="scan" style="height:30px;padding:0 10px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#111827;font-size:11px;font-weight:700;cursor:pointer">Сканировать дашборд</button>' +
             '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
@@ -118,6 +120,7 @@
     var previewEl = root.querySelector('[data-role="preview"]');
     var previewCountEl = root.querySelector('[data-role="preview-count"]');
     var scanEl = root.querySelector('[data-role="scan"]');
+    var diagnosticsEl = root.querySelector('[data-role="diagnostics"]');
     var clearHistoryEl = root.querySelector('[data-role="history-clear"]');
     var scanPanelEl = root.querySelector('[data-role="scan-panel"]');
     var scanCountEl = root.querySelector('[data-role="scan-count"]');

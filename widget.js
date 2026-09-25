@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.7.2";
+    var version = "0.7.3";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -125,6 +125,24 @@
     var scanPanelEl = root.querySelector('[data-role="scan-panel"]');
     var scanCountEl = root.querySelector('[data-role="scan-count"]');
     var scanResultsEl = root.querySelector('[data-role="scan-results"]');
+
+    var autoFollowChat = true;
+    var autoScrollThreshold = 64;
+
+    function isChatNearBottom() {
+      return (messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight) <= autoScrollThreshold;
+    }
+
+    function scrollChatToBottom(force) {
+      if (!force && !autoFollowChat) return;
+      requestAnimationFrame(function () {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+    }
+
+    messagesEl.addEventListener("scroll", function () {
+      autoFollowChat = isChatNearBottom();
+    }, { passive: true });
 
     function firstValue(v) {
       if (Array.isArray(v)) return v.length ? v[0] : "";
@@ -779,13 +797,14 @@
       wrap.appendChild(copy);
       row.appendChild(wrap);
       messagesEl.appendChild(row);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      scrollChatToBottom(false);
 
       return {
         setText: function (next) {
           text = next;
           if (role === "assistant") bubble.innerHTML = renderMarkdown(next);
           else bubble.textContent = next;
+          scrollChatToBottom(false);
         }
       };
     }
@@ -821,6 +840,7 @@
         divider.style.cssText = "text-align:center;font-size:9px;color:#9ca3af;padding:2px 0";
         messagesEl.appendChild(divider);
       }
+      scrollChatToBottom(true);
     }
 
     clearHistoryEl.onclick = function (e) {

@@ -3,7 +3,8 @@
     var root = document.getElementById(w.general.renderTo);
     if (!root) return;
 
-    var endpoint = "http://127.0.0.1:11436";
+    var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
+    var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
     var history = [];
 

@@ -1350,8 +1350,60 @@
         }
 
         function findAndApplyEntityFilter() {
-          if (!entityHint || !explicitSheets.length || typeof dataGetter !== "function") {
+          if (!tokens.length || typeof dataGetter !== "function") {
             return Promise.resolve({ applied: false });
+          }
+
+          var roots = tokens.map(tokenRoot).filter(function (x) { return x.length >= 4; });
+
+          function sheetAffinity(sheetGuid) {
+            var score = 0;
+            widgetIndex.forEach(function (widgetInfo) {
+              if (widgetInfo.sheetGuid !== sheetGuid) return;
+              var raw = compactPrimitiveText(rawByGuid[widgetInfo.guid], 0);
+              var hay = normalizeSearchText([widgetInfo.title, raw].join(" "));
+              roots.forEach(function (rootToken) {
+                if (normalizedContainsToken(hay, rootToken)) score++;
+              });
+            });
+            return Math.min(score, 25);
+          }
+
+          function pickFilterValue(best) {
+            var valueObj = best && best.value ? best.value : {};
+            var candidates = [];
+
+            ["formattedValues","values","formattedKeys","keys"].forEach(function (key) {
+              var arr = Array.isArray(valueObj[key]) ? valueObj[key] : [];
+              arr.forEach(function (value) {
+                if (value !== null && value !== undefined && String(value).trim()) {
+                  candidates.push(String(value));
+                }
+              });
+            });
+
+            if (!candidates.length && best && best.text) candidates.push(String(best.text));
+            if (!candidates.length && entityHint) candidates.push(entityHint);
+
+            candidates = candidates.filter(function (value, idx) {
+              return candidates.indexOf(value) === idx;
+            });
+
+            var targetRoots = strongTokens.length ? strongTokens : roots;
+            candidates.sort(function (a, b) {
+              function score(value) {
+                var s = 0;
+                targetRoots.forEach(function (rootToken) {
+                  if (normalizedContainsToken(value, rootToken)) s += 20;
+                });
+                if (entityHint && normalizeSearchText(value) === normalizeSearchText(entityHint)) s += 50;
+                s -= Math.min(String(value).length / 80, 5);
+                return s;
+              }
+              return score(b) - score(a);
+            });
+
+            return candidates.length ? candidates[0] : "";
           }
 
           var filters = pool.filter(function (item) {
@@ -1364,56 +1416,66 @@
               .then(function (data) {
                 var targeted = targetedDataSnapshot(data, question);
                 var best = targeted.matches && targeted.matches.length ? targeted.matches[0] : null;
-                var titleBonus = /наименование.*объект|объект/i.test(normalizeSearchText(filterInfo.title)) ? 20 : 0;
+                var normalizedTitle = normalizeSearchText(filterInfo.title);
+                var titleBonus = /наименование.*объект|объект|подобъект/i.test(normalizedTitle) ? 25 : 0;
+                var affinityBonus = sheetAffinity(filterInfo.sheetGuid) * 2;
+                var filterValue = best ? pickFilterValue(best) : "";
                 return {
                   info: filterInfo,
                   targeted: targeted,
-                  score: best ? best.score + titleBonus : 0,
-                  best: best
+                  score: best ? best.score + titleBonus + affinityBonus : 0,
+                  best: best,
+                  filterValue: filterValue
                 };
               })
               .catch(function () {
-                return { info: filterInfo, score: 0, best: null };
+                return { info: filterInfo, score: 0, best: null, filterValue: "" };
               });
           })).then(function (candidates) {
             candidates.sort(function (a, b) { return b.score - a.score; });
             var winner = candidates[0];
-            if (!winner || !winner.best || winner.score <= 0) {
-              return { applied: false, reason: "Фильтр с объектом не найден" };
+
+            if (!winner || !winner.best || winner.score <= 0 || !winner.filterValue) {
+              return {
+                applied: false,
+                reason: "Подходящий фильтр сущности не найден",
+                candidates: candidates.slice(0, 5).map(function (x) {
+                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue };
+                })
+              };
             }
 
-            var valueObj = winner.best.value || {};
-            var values = Array.isArray(valueObj.formattedValues) && valueObj.formattedValues.length
-              ? valueObj.formattedValues
-              : Array.isArray(valueObj.values) && valueObj.values.length
-                ? valueObj.values
-                : Array.isArray(valueObj.formattedKeys) && valueObj.formattedKeys.length
-                  ? valueObj.formattedKeys
-                  : Array.isArray(valueObj.keys) ? valueObj.keys : [];
-
-            var filterValue = values.length ? String(values[0]) : entityHint;
             var previous = getSelected(winner.info.guid);
 
-            return setFilterAsync(api, winner.info.guid, [[filterValue]]).then(function (ok) {
+            return setFilterAsync(api, winner.info.guid, [[winner.filterValue]]).then(function (ok) {
               return {
                 applied: !!ok,
                 guid: winner.info.guid,
                 title: winner.info.title,
-                value: filterValue,
-                previous: previous
+                sheet: winner.info.sheet,
+                sheetGuid: winner.info.sheetGuid,
+                value: winner.filterValue,
+                previous: previous,
+                candidates: candidates.slice(0, 5).map(function (x) {
+                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue };
+                })
               };
             });
           });
         }
 
         return findAndApplyEntityFilter().then(function (filterAction) {
-          var scored = pool.map(function (item) {
+          var effectivePool = filterAction.applied && filterAction.sheetGuid
+            ? pool.filter(function (item) { return item.sheetGuid === filterAction.sheetGuid; })
+            : pool;
+
+          var scored = effectivePool.map(function (item) {
             var rawSummary = compactPrimitiveText(rawByGuid[item.guid], 0);
             var hay = normalizeSearchText([item.title, item.type, item.sheet, rawSummary, item.guid].join(" "));
             var score = item.current ? 1 : 0;
 
             tokens.forEach(function (token) {
-              if (hay.indexOf(token) >= 0) score += 5;
+              if (normalizedContainsToken(hay, token)) score += 5;
             });
             if (item.guid && q.indexOf(item.guid.toLowerCase()) >= 0) score += 50;
             if (/filter|userwidget|textwidget|datagrid/i.test(item.type)) score += 2;

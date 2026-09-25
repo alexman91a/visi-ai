@@ -723,6 +723,36 @@
       }
     }
 
+    function postDiagnostic(payload) {
+      try {
+        return fetch(endpoint + "/inspect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).catch(function () {});
+      } catch (_) {
+        return Promise.resolve();
+      }
+    }
+
+    diagnosticsEl.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      var payload = lastDiagnostic || {
+        version: version,
+        capturedAt: new Date().toISOString(),
+        dashboardGuid: dashboardGuidForHistory,
+        note: "Диагностика вопроса еще не сформирована."
+      };
+
+      copyValue(JSON.stringify(payload, null, 2), diagnosticsEl);
+    };
+
+    diagnosticsEl.addEventListener("pointerdown", function (e) {
+      e.stopPropagation();
+    }, true);
+
     function addMessage(role, text) {
       var row = document.createElement("div");
       row.style.cssText = "display:flex;justify-content:" + (role === "user" ? "flex-end" : "flex-start");

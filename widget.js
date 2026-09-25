@@ -95,7 +95,7 @@
         '</div>' +
         '<div data-role="scan-panel" style="display:none;padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
-            '<div style="font-size:12px;font-weight:700">Виджеты на листе</div>' +
+            '<div style="font-size:12px;font-weight:700">Структура дашборда</div>' +
             '<div data-role="scan-count" style="font-size:10px;color:#9ca3af"></div>' +
           '</div>' +
           '<div data-role="scan-results" style="max-height:170px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +

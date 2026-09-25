@@ -6,6 +6,14 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
+    var version = "0.7.0";
+    var dashboardGuidForHistory = "";
+    try {
+      dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
+    } catch (_) {
+      dashboardGuidForHistory = location.pathname;
+    }
+    var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
     var history = [];
 
     function safeSnapshot(value, depth, seen) {
@@ -71,15 +79,16 @@
     root.innerHTML =
       '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;background:#fff;border:1px solid #d9dde5;border-radius:14px;overflow:hidden;font-family:Arial,sans-serif;color:#111827">' +
         '<div style="padding:12px 14px;border-bottom:1px solid #eceff3;display:flex;align-items:center;justify-content:space-between;background:#fafbfc">' +
-          '<div><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:11px;color:#6b7280">' + model + '</div></div>' +
+          '<div><div style="display:flex;align-items:center;gap:7px"><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:9px;font-weight:700;color:#6b7280;background:#eef2f7;border-radius:999px;padding:2px 6px">v' + version + '</div></div><div style="font-size:11px;color:#6b7280;margin-top:2px">' + model + '</div></div>' +
           '<div style="display:flex;align-items:center;gap:10px">' +
+            '<button data-role="history-clear" style="height:30px;padding:0 9px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#6b7280;font-size:10px;font-weight:700;cursor:pointer">Очистить историю</button>' +
             '<button data-role="scan" style="height:30px;padding:0 10px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#111827;font-size:11px;font-weight:700;cursor:pointer">Сканировать дашборд</button>' +
             '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
           '</div>' +
         '</div>' +
         '<div style="padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
-            '<div style="font-size:12px;font-weight:700">Данные виджета</div>' +
+            '<div><div style="font-size:12px;font-weight:700">Данные для ответа</div><div style="font-size:9px;color:#9ca3af;margin-top:1px">Что именно VISI AI получил из Visiology для текущего вопроса</div></div>' +
             '<div data-role="preview-count" style="font-size:10px;color:#9ca3af"></div>' +
           '</div>' +
           '<div data-role="preview" style="max-height:145px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
@@ -97,7 +106,7 @@
             '<textarea data-role="input" placeholder="Спроси о любом листе, виджете или его данных…" style="flex:1;resize:none;min-height:42px;max-height:120px;border:1px solid #cfd5df;border-radius:10px;padding:10px 12px;box-sizing:border-box;font:13px Arial;outline:none"></textarea>' +
             '<button data-role="send" style="height:42px;padding:0 16px;border:0;border-radius:10px;background:#111827;color:white;font-weight:700;cursor:pointer">Отправить</button>' +
           '</div>' +
-          '<div style="margin-top:6px;font-size:10px;color:#9ca3af">Ollama на вашем ПК · через HTTPS-туннель с локальным резервом</div>' +
+          '<div style="margin-top:6px;font-size:10px;color:#9ca3af">Ollama на вашем ПК · HTTPS-туннель с локальным резервом · история сохраняется в этом браузере</div>' +
         '</div>' +
       '</div>';
 
@@ -109,6 +118,7 @@
     var previewEl = root.querySelector('[data-role="preview"]');
     var previewCountEl = root.querySelector('[data-role="preview-count"]');
     var scanEl = root.querySelector('[data-role="scan"]');
+    var clearHistoryEl = root.querySelector('[data-role="history-clear"]');
     var scanPanelEl = root.querySelector('[data-role="scan-panel"]');
     var scanCountEl = root.querySelector('[data-role="scan-count"]');
     var scanResultsEl = root.querySelector('[data-role="scan-results"]');

@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.2";
+    var version = "0.8.3";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -172,7 +172,7 @@
       var pending = getPendingState();
       if (pending) {
         pendingBannerEl.style.display = "block";
-        pendingBannerEl.textContent = "● Запрос выполняется: " + pending.question;
+        pendingBannerEl.textContent = "● " + (pending.phase || "Запрос выполняется…") + " · " + pending.question;
         sendEl.disabled = true;
         inputEl.disabled = true;
         sendEl.style.opacity = ".55";
@@ -829,13 +829,24 @@
       } catch (_) {}
     }
 
-    function setPendingState(question) {
+    function setPendingState(question, phase) {
       try {
         localStorage.setItem(pendingKey, JSON.stringify({
           question: question,
+          phase: phase || "Собираю данные…",
           startedAt: Date.now()
         }));
         historySignature = storageStateSignature();
+      } catch (_) {}
+      updatePendingUi();
+    }
+
+    function updatePendingPhase(phase) {
+      try {
+        var pending = getPendingState();
+        if (!pending) return;
+        pending.phase = phase || pending.phase;
+        localStorage.setItem(pendingKey, JSON.stringify(pending));
       } catch (_) {}
       updatePendingUi();
     }
@@ -857,7 +868,7 @@
 
       var pending = getPendingState();
       if (pending) {
-        addMessage("assistant", "Запрос выполняется… временно применяю фильтр и собираю данные с целевого листа.");
+        addMessage("assistant", (pending.phase || "Запрос выполняется…") + "\n\n_Запрос ещё выполняется; это сообщение обновится после завершения._");
       }
 
       if (showRestoredLabel && history.length) {
@@ -997,12 +1008,12 @@
       }
 
       if (!value) {
-        var plain = raw.match(/объект(?:у|а|е|ом)?\s+(.+?)(?=\s+(?:какая|какой|какие|сколько|статистика|покажи|дай|есть|найди)\b|[?.!,]|$)/i);
+        var plain = raw.match(/объект(?:у|а|е|ом)?\s+(.+?)(?=\s+(?:какая|какой|какие|сколько|статистика|покажи|дай|есть|найди)(?:\s|[?.!,]|$)|[?.!,]|$)/i);
         if (plain && plain[1]) value = plain[1];
       }
 
       if (!value && /статист|задан|информац|сведен/i.test(raw)) {
-        var byTail = raw.match(/\bпо\s+([a-zа-яё0-9_-]{4,})\s*[?.!]*$/i);
+        var byTail = raw.match(/по\s+([a-zа-яё0-9_-]{4,})\s*[?.!]*$/i);
         if (byTail && byTail[1] && !/^(данным|заданиям|статистике|объекту|проекту)$/i.test(byTail[1])) {
           value = byTail[1];
         }
@@ -1349,6 +1360,30 @@
             });
         }
 
+        function intentSheetBonus(sheetGuid) {
+          var qn = normalizeSearchText(question);
+          var score = 0;
+          var wantsTasks = /задан|задач|статист/i.test(qn);
+          var wantsInteraction = /график.*взаимодейств|взаимодейств/i.test(qn);
+
+          widgetIndex.forEach(function (widgetInfo) {
+            if (widgetInfo.sheetGuid !== sheetGuid) return;
+            var raw = compactPrimitiveText(rawByGuid[widgetInfo.guid], 0);
+            var hay = normalizeSearchText([widgetInfo.title, widgetInfo.type, raw].join(" "));
+
+            if (wantsTasks) {
+              if (hay.indexOf("количество заданий") >= 0) score += 8;
+              if (hay.indexOf("статистика по заданиям") >= 0) score += 18;
+              if (hay.indexOf("статус задач") >= 0 || hay.indexOf("статус задан") >= 0) score += 5;
+              if (hay.indexOf("просроч") >= 0 || hay.indexOf("выполн") >= 0 || hay.indexOf("истекает срок") >= 0) score += 3;
+            }
+
+            if (wantsInteraction && hay.indexOf("график") >= 0) score += 4;
+          });
+
+          return Math.min(score, 80);
+        }
+
         function findAndApplyEntityFilter() {
           if (!tokens.length || typeof dataGetter !== "function") {
             return Promise.resolve({ applied: false });
@@ -1419,11 +1454,12 @@
                 var normalizedTitle = normalizeSearchText(filterInfo.title);
                 var titleBonus = /наименование.*объект|объект|подобъект/i.test(normalizedTitle) ? 25 : 0;
                 var affinityBonus = sheetAffinity(filterInfo.sheetGuid) * 2;
+                var intentBonus = intentSheetBonus(filterInfo.sheetGuid);
                 var filterValue = best ? pickFilterValue(best) : "";
                 return {
                   info: filterInfo,
                   targeted: targeted,
-                  score: best ? best.score + titleBonus + affinityBonus : 0,
+                  score: best ? best.score + titleBonus + affinityBonus + intentBonus : 0,
                   best: best,
                   filterValue: filterValue
                 };
@@ -1659,11 +1695,11 @@
       history = loadSavedHistory();
       addMessage("user", text);
       history.push({ role: "user", content: text });
-      setPendingState(text);
+      setPendingState(text, "Собираю данные и определяю нужный лист…");
       saveHistory();
+      renderHistoryState(false);
       setBusy(true);
 
-      var waitBubble = addMessage("assistant", "Собираю данные релевантных виджетов…");
       var contextJson = "{}";
       var contextObject = null;
 
@@ -1776,11 +1812,11 @@
 
         var directAnswer = buildDirectMetricAnswer(contextObject);
         if (directAnswer) {
-          waitBubble.setText("Формирую ответ по полученным показателям…");
+          updatePendingPhase("Формирую ответ по полученным показателям…");
           return Promise.resolve({ message: { content: directAnswer }, direct: true });
         }
 
-        waitBubble.setText("Анализирую данные…");
+        updatePendingPhase("Анализирую данные…");
         return requestChat(endpoint);
       })
       .catch(function (e) {
@@ -1793,7 +1829,6 @@
       })
       .then(function (data) {
         var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
-        try { waitBubble.setText(answer); } catch (_) {}
         persistAssistant(answer);
 
         lastDiagnostic = {
@@ -1810,7 +1845,6 @@
       })
       .catch(function (e) {
         var errorText = "**Ошибка:** " + (e && e.message ? e.message : String(e));
-        try { waitBubble.setText(errorText); } catch (_) {}
         persistAssistant(errorText);
 
         lastDiagnostic = {
@@ -1886,8 +1920,6 @@
         return checkHealth(localEndpoint, "Локально");
       })
       .then(function () {
-        addMessage("assistant", "Связь с Ollama установлена. Можно спрашивать о других листах, виджетах и их данных.");
-
         setTimeout(function () {
           if (!scanEl.disabled) {
             scanDashboard();

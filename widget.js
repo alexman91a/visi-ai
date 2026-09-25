@@ -192,17 +192,43 @@
       return "";
     }
 
+    function smartText(value, depth) {
+      depth = depth || 0;
+      if (depth > 3 || value === null || value === undefined) return "";
+      if (typeof value === "string") {
+        var div = document.createElement("div");
+        div.innerHTML = value;
+        return (div.textContent || div.innerText || "").trim();
+      }
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      if (Array.isArray(value)) {
+        for (var ai = 0; ai < value.length; ai++) {
+          var at = smartText(value[ai], depth + 1);
+          if (at) return at;
+        }
+        return "";
+      }
+      if (typeof value !== "object") return "";
+      var keys = ["text","value","name","title","caption","displayName","contentText","content","ru-RU","ru","default"];
+      for (var si = 0; si < keys.length; si++) {
+        if (Object.prototype.hasOwnProperty.call(value, keys[si])) {
+          var st = smartText(value[keys[si]], depth + 1);
+          if (st && st !== "[object Object]") return st;
+        }
+      }
+      return "";
+    }
+
     function getTitle(obj) {
       if (!obj || typeof obj !== "object") return "";
       var general = obj.general || {};
       var candidates = [
-        obj.title, obj.name, obj.caption, obj.displayName, obj.label,
+        obj.title, obj.name, obj.caption, obj.displayName, obj.label, obj.contentText,
         general.title, general.name, general.caption
       ];
       for (var i = 0; i < candidates.length; i++) {
-        if (candidates[i] !== undefined && candidates[i] !== null && String(candidates[i]).trim()) {
-          return String(candidates[i]);
-        }
+        var text = smartText(candidates[i], 0);
+        if (text && text !== "[object Object]") return text;
       }
       return "";
     }

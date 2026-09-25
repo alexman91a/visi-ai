@@ -1057,25 +1057,43 @@
           : scored.slice(0, 12).map(function (x) { return x.item; });
 
         var dataGetter = api.getWidgetDataByGuid || api.GetWidgetDataByGuid;
+        var selectedGetter = api.getSelectedValues || api.GetSelectedValues;
+
         var dataPromises = selected.map(function (info) {
+          var selectedValues = null;
+          if (/filter/i.test(info.type) && typeof selectedGetter === "function") {
+            try {
+              selectedValues = selectedGetter.call(api, info.guid);
+            } catch (_) {}
+          }
+
           if (typeof dataGetter !== "function") {
-            return Promise.resolve({ info: info, error: "getWidgetDataByGuid() недоступен", relevance: 0 });
+            return Promise.resolve({
+              info: info,
+              selectedValues: selectedValues,
+              error: "getWidgetDataByGuid() недоступен",
+              relevance: selectedValues && selectedValues.length ? 15 : 0
+            });
           }
 
           return Promise.resolve()
             .then(function () { return dataGetter.call(api, info.guid); })
             .then(function (data) {
               var targeted = targetedDataSnapshot(data, question);
+              var relevance = targeted.matchCount ? targeted.matches[0].score : 0;
+              if (selectedValues && selectedValues.length) relevance = Math.max(relevance, 15);
               return {
                 info: info,
-                relevance: targeted.matchCount ? targeted.matches[0].score : 0,
+                selectedValues: selectedValues,
+                relevance: relevance,
                 data: targeted
               };
             })
             .catch(function (e) {
               return {
                 info: info,
-                relevance: 0,
+                selectedValues: selectedValues,
+                relevance: selectedValues && selectedValues.length ? 15 : 0,
                 error: e && e.message ? e.message : String(e)
               };
             });
@@ -1085,9 +1103,19 @@
           allWidgetData.sort(function (a, b) { return (b.relevance || 0) - (a.relevance || 0); });
 
           var matched = allWidgetData.filter(function (x) { return (x.relevance || 0) > 0; });
-          var dataToSend = matched.length
-            ? matched.slice(0, 12)
-            : allWidgetData.slice(0, 10);
+          var important = allWidgetData.filter(function (x) {
+            return /userwidget/i.test(x.info && x.info.type || "") ||
+              (x.selectedValues && x.selectedValues.length);
+          });
+
+          var seenSend = {};
+          var dataToSend = [];
+          matched.concat(important).concat(allWidgetData).forEach(function (x) {
+            var key = x.info && x.info.guid ? x.info.guid : "";
+            if (!key || seenSend[key] || dataToSend.length >= 18) return;
+            seenSend[key] = true;
+            dataToSend.push(x);
+          });
 
           var ownTargeted = targetedDataSnapshot(w && w.data ? w.data.primaryData : null, question);
 
@@ -1098,6 +1126,8 @@
               sheets: sheetIndex
             },
             requestedSheet: explicitSheets.map(function (x) { return x.name; }),
+            entityHint: extractEntityHint(question),
+            strongEntityTokens: strongEntityTokens(question),
             queryTokens: tokens,
             allWidgets: widgetIndex,
             searchedWidgetCount: selected.length,
@@ -1105,13 +1135,26 @@
             selectedWidgetData: dataToSend,
             ownWidgetData: ownTargeted,
             note:
-              "Поиск выполняется не только по названиям виджетов, но и внутри их данных. " +
-              "Если в вопросе указано название листа, сканируются данные виджетов именно этого листа. " +
-              "В matches находятся строки и узлы данных, содержащие слова из запроса."
+              "Поиск по объекту использует сильные токены названия объекта, например названия станций. " +
+              "Также передаются аналитические UserWidget и текущие выбранные значения фильтров. " +
+              "Для таблиц Visiology getWidgetDataByGuid может возвращать неполные данные, поэтому выводы по таблицам требуют подтверждения совпадениями."
           };
 
+          try {
+            fetch(endpoint + "/inspect", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                capturedAt: new Date().toISOString(),
+                kind: "question-context",
+                question: question,
+                context: context
+              })
+            }).catch(function () {});
+          } catch (_) {}
+
           var json = JSON.stringify(context);
-          if (json.length > 140000) json = json.slice(0, 140000) + "\n[TRUNCATED]";
+          if (json.length > 180000) json = json.slice(0, 180000) + "\n[TRUNCATED]";
           return json;
         });
       }).catch(function (e) {

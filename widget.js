@@ -7,7 +7,7 @@
     var localEndpoint = "http://127.0.0.1:11436";
     var localFallbackReady = false;
     var model = "qwen3-harness8k:14b";
-    var version = "0.10.0";
+    var version = "0.10.1";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -248,6 +248,17 @@
       }
 
       var sources = Array.isArray(context.selectedWidgetData) ? context.selectedWidgetData : [];
+      if (context.mode === "data-model" && Array.isArray(context.selectedTables)) {
+        sources = context.selectedTables.map(function (table) {
+          return {
+            info: { title: table.name, type: "DataModelTable", sheet: "Модель данных" },
+            relevance: table.score || 0,
+            rows: table.rows || [],
+            data: { matches: [] },
+            error: table.error || ""
+          };
+        });
+      }
       var searched = context.searchedWidgetCount || 0;
       var matched = context.matchedWidgetCount || 0;
       previewCountEl.textContent = searched + " проверено · " + matched + " совпадений";
@@ -751,6 +762,73 @@
 
       var api = visApi();
 
+      function isStringType(col) {
+        return /string|text/i.test(String(col && col.dataType || ""));
+      }
+
+      function isNumericType(col) {
+        return /int|decimal|double|single|number|currency/i.test(String(col && col.dataType || ""));
+      }
+
+      function firstCell(data) {
+        var results = data && Array.isArray(data.results) ? data.results : [];
+        var values = results[0] && Array.isArray(results[0].values) ? results[0].values : [];
+        return values.length && Array.isArray(values[0]) ? values[0][0] : null;
+      }
+
+      function modelRoots(questionText) {
+        var generic = {
+          "раздел":1,"разделов":1,"проект":1,"проекта":1,"лини":1,"линия":1,
+          "метро":1,"метрополитен":1,"метрополитена":1,"документ":1,"документов":1,
+          "комплект":1,"комплектов":1,"количеств":1,"всег":1,"данн":1,"таблиц":1,
+          "скольк":1,"задач":1,"задан":1,"статистик":1,"показател":1
+        };
+
+        var roots = questionTokens(questionText).map(function (token) {
+          return { raw: token, root: tokenRoot(token) };
+        });
+
+        var entity = roots.filter(function (x) {
+          if (!x.root || x.root.length < 4) return false;
+          if (generic[x.root] || generic[x.raw]) return false;
+          return true;
+        });
+
+        entity.sort(function (a, b) {
+          var ad = /\d/.test(a.raw) ? 1 : 0;
+          var bd = /\d/.test(b.raw) ? 1 : 0;
+          if (ad !== bd) return bd - ad;
+          return b.raw.length - a.raw.length;
+        });
+
+        var uniq = [];
+        entity.forEach(function (x) {
+          if (!uniq.some(function (u) { return u.root === x.root; })) uniq.push(x);
+        });
+
+        return {
+          entityTerms: uniq.slice(0, 4).map(function (x) { return x.raw; }),
+          metricRoots: roots.filter(function (x) {
+            return /раздел|комплект|документ|количеств|задач|просроч|выполн|срок|план|факт|стоим|цен/i.test(x.root);
+          }).map(function (x) { return x.root; })
+        };
+      }
+
+      function buildFilter(tableName, columns, terms) {
+        if (!terms.length || !columns.length) return "'" + daxEscapeTable(tableName) + "'";
+
+        var t = daxEscapeTable(tableName);
+        var termConditions = terms.map(function (term) {
+          var escapedTerm = daxEscapeString(term);
+          var ors = columns.map(function (col) {
+            return "CONTAINSSTRING('" + t + "'[" + daxEscapeColumn(col.name) + "], \"" + escapedTerm + "\")";
+          });
+          return "(" + ors.join(" || ") + ")";
+        });
+
+        return "FILTER('" + t + "', " + termConditions.join(" && ") + ")";
+      }
+
       return withTimeout(loadFullDashboard(api), 6000, "getDashboard for data model")
         .then(function (full) {
           var dashboard = full && full.data ? full.data : {};
@@ -778,274 +856,185 @@
 
             if (!tables.length) throw new Error("В модели данных не найдены таблицы");
 
+            var roots = modelRoots(question);
             var tokens = questionTokens(question);
+
             var scored = tables.map(function (table) {
-              return {
-                table: table,
-                score: scoreModelTable(table, tokens, question)
-              };
-            }).sort(function (a, b) {
-              return b.score - a.score;
-            });
+              var score = scoreModelTable(table, tokens, question);
+              var name = normalizeSearchText(table && table.name || "");
+              var colNames = normalizeSearchText((table.columns || []).map(function (x) { return x && x.name || ""; }).join(" "));
 
-            var selected = scored.filter(function (x) { return x.score > 0; }).slice(0, 6);
-            if (!selected.length) selected = scored.slice(0, Math.min(5, scored.length));
+              if (/раздел/i.test(question) && /раздел/i.test(colNames)) score += 80;
+              if (/комплект/i.test(question) && /комплект|документ/i.test(colNames + " " + name)) score += 70;
+              if (/документ/i.test(question) && /документ|шифр/i.test(colNames)) score += 45;
 
-            var distinctiveTokens = tokens.filter(function (token) {
-              return !/^(документ|документ|комплект|количеств|проект|данн|таблиц|всег)$/i.test(tokenRoot(token));
-            });
-            var entityTerm = "";
+              return { table: table, score: score };
+            }).sort(function (a, b) { return b.score - a.score; });
 
-            distinctiveTokens.sort(function (a, b) {
-              var ad = /\d/.test(a) ? 1 : 0;
-              var bd = /\d/.test(b) ? 1 : 0;
-              if (ad !== bd) return bd - ad;
-              return b.length - a.length;
-            });
+            var selected = scored.filter(function (x) { return x.score > 0; }).slice(0, 8);
+            if (!selected.length) selected = scored.slice(0, Math.min(6, scored.length));
 
-            if (distinctiveTokens.length) entityTerm = distinctiveTokens[0];
-
-            function previewOne(entry) {
+            function queryOne(entry) {
               var table = entry.table || {};
               var tableName = String(table.name || "");
-              if (!tableName) return Promise.resolve(null);
+              var columns = Array.isArray(table.columns) ? table.columns : [];
+              var stringColumns = columns.filter(isStringType).slice(0, 24);
+              var filterExpr = buildFilter(tableName, stringColumns, roots.entityTerms);
+              var expression =
+                "EVALUATE {COUNTROWS(" + filterExpr + ")} " +
+                "EVALUATE TOPN(30," + filterExpr + ")";
 
-              var tableDax = daxEscapeTable(tableName);
-              var previewExpression =
-                "EVALUATE {COUNTROWS('" + tableDax + "')} " +
-                "EVALUATE TOPNSKIP(60,0,'" + tableDax + "')";
-
-              return queryModelTable(workspaceId, datasetId, previewExpression)
+              return queryModelTable(workspaceId, datasetId, expression)
                 .then(function (data) {
-                  return {
+                  var filteredRows = compactQueryCount(data);
+                  var rows = compactQueryRows(data, 1);
+                  var metricCandidates = columns.filter(function (col) {
+                    if (!isNumericType(col)) return false;
+                    var n = normalizeSearchText(col && col.name || "");
+                    return roots.metricRoots.some(function (root) {
+                      return normalizedContainsToken(n, root);
+                    });
+                  }).slice(0, 4);
+
+                  var base = {
                     name: tableName,
                     id: table.id || "",
                     score: entry.score,
-                    columns: (Array.isArray(table.columns) ? table.columns : []).slice(0, 80).map(function (col) {
+                    filteredRows: filteredRows,
+                    matchedBy: roots.entityTerms.length ? { terms: roots.entityTerms } : null,
+                    columns: columns.slice(0, 50).map(function (col) {
                       return {
                         name: col && col.name || "",
                         dataType: col && col.dataType,
                         isHidden: !!(col && col.isHidden)
                       };
                     }),
-                    measures: (Array.isArray(table.measures) ? table.measures : []).slice(0, 40).map(function (m) {
-                      return { name: m && m.name || "" };
-                    }),
-                    totalRows: compactQueryCount(data),
-                    rows: compactQueryRows(data, 1),
-                    matchedBy: null
+                    rows: rows.slice(0, 30),
+                    aggregates: []
                   };
+
+                  if (!metricCandidates.length || !(filteredRows > 0)) return base;
+
+                  return Promise.all(metricCandidates.map(function (metricCol) {
+                    var t = daxEscapeTable(tableName);
+                    var col = daxEscapeColumn(metricCol.name);
+                    var aggExpression =
+                      "EVALUATE ROW(\"Value\", SUMX(" + filterExpr + ", '" + t + "'[" + col + "]))";
+
+                    return queryModelTable(workspaceId, datasetId, aggExpression)
+                      .then(function (aggData) {
+                        return {
+                          metric: metricCol.name,
+                          value: firstCell(aggData),
+                          aggregation: "SUM"
+                        };
+                      })
+                      .catch(function () { return null; });
+                  })).then(function (aggregates) {
+                    base.aggregates = aggregates.filter(Boolean);
+                    return base;
+                  });
                 })
                 .catch(function (e) {
                   return {
                     name: tableName,
                     id: table.id || "",
                     score: entry.score,
-                    columns: (Array.isArray(table.columns) ? table.columns : []).slice(0, 80).map(function (col) {
+                    filteredRows: null,
+                    matchedBy: roots.entityTerms.length ? { terms: roots.entityTerms } : null,
+                    columns: columns.slice(0, 50).map(function (col) {
                       return { name: col && col.name || "", dataType: col && col.dataType };
                     }),
-                    measures: [],
-                    totalRows: null,
                     rows: [],
-                    error: e && e.message ? e.message : String(e),
-                    matchedBy: null
+                    aggregates: [],
+                    error: e && e.message ? e.message : String(e)
                   };
                 });
             }
 
-            return Promise.all(selected.map(previewOne)).then(function (previews) {
-              previews = previews.filter(Boolean);
-
-              function rowContains(rows, term) {
-                if (!term) return false;
-                return rows.some(function (row) {
-                  return normalizedContainsToken(JSON.stringify(row), term);
-                });
-              }
-
-              var alreadyMatched = previews.filter(function (preview) {
-                return rowContains(preview.rows || [], entityTerm);
+            return Promise.all(selected.map(queryOne)).then(function (results) {
+              results.sort(function (a, b) {
+                var am = a.filteredRows > 0 ? 1 : 0;
+                var bm = b.filteredRows > 0 ? 1 : 0;
+                if (am !== bm) return bm - am;
+                return (b.score || 0) - (a.score || 0);
               });
 
-              if (!entityTerm || alreadyMatched.length) {
+              var matched = results.filter(function (x) { return x.filteredRows > 0; });
+              var useful = matched.length ? matched : results.slice(0, 4);
+
+              var compactTables = useful.slice(0, 5).map(function (table) {
                 return {
-                  workspaceId: workspaceId,
-                  datasetId: datasetId,
-                  tableCount: tables.length,
-                  selectedTables: previews,
-                  entityTerm: entityTerm
+                  name: table.name,
+                  score: table.score,
+                  filteredRows: table.filteredRows,
+                  matchedBy: table.matchedBy,
+                  aggregates: table.aggregates || [],
+                  columns: (table.columns || []).slice(0, 24),
+                  rows: (table.rows || []).slice(0, 16),
+                  error: table.error || ""
                 };
-              }
+              });
 
-              var candidateColumns = [];
-              previews.slice(0, 4).forEach(function (preview) {
-                (preview.columns || []).forEach(function (col) {
-                  var name = String(col.name || "");
-                  var n = normalizeSearchText(name);
-                  var bonus = 0;
-                  if (/проект|объект|имя|наимен|код|номер|лини|участ|этап|мбп/i.test(n)) bonus += 20;
-                  if (/строк|string|text/i.test(String(col.dataType || ""))) bonus += 8;
-                  candidateColumns.push({
-                    preview: preview,
-                    column: col,
-                    score: bonus + (preview.score || 0)
-                  });
+              var derivedFacts = [];
+              compactTables.forEach(function (table) {
+                (table.aggregates || []).forEach(function (agg) {
+                  if (agg && agg.value !== null && agg.value !== undefined) {
+                    derivedFacts.push({
+                      table: table.name,
+                      metric: agg.metric,
+                      value: agg.value,
+                      aggregation: agg.aggregation,
+                      filteredRows: table.filteredRows
+                    });
+                  }
                 });
               });
 
-              candidateColumns.sort(function (a, b) { return b.score - a.score; });
-              candidateColumns = candidateColumns.slice(0, 12);
-
-              function findMatch(index) {
-                if (index >= candidateColumns.length) {
-                  return Promise.resolve({
-                    workspaceId: workspaceId,
-                    datasetId: datasetId,
-                    tableCount: tables.length,
-                    selectedTables: previews,
-                    entityTerm: entityTerm
-                  });
-                }
-
-                var candidate = candidateColumns[index];
-                var tableName = candidate.preview.name;
-                var columnName = candidate.column.name;
-                if (!tableName || !columnName) return findMatch(index + 1);
-
-                var t = daxEscapeTable(tableName);
-                var col = daxEscapeColumn(columnName);
-                var term = daxEscapeString(entityTerm);
-                var ref = "'" + t + "'[" + col + "]";
-                var filter = "FILTER('" + t + "', CONTAINSSTRING(" + ref + ', "' + term + '"))';
-                var expression =
-                  "EVALUATE {COUNTROWS(" + filter + ")} " +
-                  "EVALUATE TOPN(80," + filter + ")";
-
-                return queryModelTable(workspaceId, datasetId, expression)
-                  .then(function (data) {
-                    var rows = compactQueryRows(data, 1);
-                    var count = compactQueryCount(data);
-
-                    if ((count !== null && count > 0) || rows.length) {
-                      candidate.preview.rows = rows;
-                      candidate.preview.filteredRows = count;
-                      candidate.preview.matchedBy = {
-                        column: columnName,
-                        term: entityTerm
-                      };
-
-                      var reordered = [candidate.preview].concat(previews.filter(function (x) {
-                        return x !== candidate.preview;
-                      }));
-
-                      return {
-                        workspaceId: workspaceId,
-                        datasetId: datasetId,
-                        tableCount: tables.length,
-                        selectedTables: reordered,
-                        entityTerm: entityTerm
-                      };
-                    }
-
-                    return findMatch(index + 1);
-                  })
-                  .catch(function () {
-                    return findMatch(index + 1);
-                  });
-              }
-
-              return findMatch(0);
-            });
-          });
-        })
-        .then(function (dataContext) {
-          var selectedTables = dataContext.selectedTables || [];
-          var useful = selectedTables.filter(function (table) {
-            return (table.rows && table.rows.length) || table.totalRows !== null;
-          });
-
-          var compactTables = useful.slice(0, 6).map(function (table) {
-            return {
-              name: table.name,
-              id: table.id,
-              score: table.score,
-              totalRows: table.totalRows,
-              filteredRows: table.filteredRows,
-              matchedBy: table.matchedBy,
-              columns: (table.columns || []).slice(0, 40),
-              measures: (table.measures || []).slice(0, 20),
-              rows: (table.rows || []).slice(0, 40),
-              error: table.error || ""
-            };
-          });
-
-          var context = {
-            mode: "data-model",
-            directTableAccess: true,
-            dataset: {
-              workspaceId: dataContext.workspaceId,
-              datasetId: dataContext.datasetId
-            },
-            tableCount: dataContext.tableCount,
-            entityTerm: dataContext.entityTerm,
-            selectedTables: compactTables,
-            searchedWidgetCount: dataContext.tableCount || 0,
-            matchedWidgetCount: useful.length,
-            selectedWidgetData: compactTables.map(function (table) {
-              return {
-                info: {
-                  title: table.name,
-                  type: "DataModelTable",
-                  sheet: "Модель данных"
+              var context = {
+                mode: "data-model",
+                directTableAccess: true,
+                dataset: {
+                  workspaceId: workspaceId,
+                  datasetId: datasetId
                 },
-                relevance: table.score || 0,
-                rows: (table.rows || []).slice(0, 25),
-                columnSummary: {},
-                data: { matches: [] },
-                error: table.error || ""
+                tableCount: tables.length,
+                entityTerms: roots.entityTerms,
+                derivedFacts: derivedFacts,
+                selectedTables: compactTables,
+                searchedWidgetCount: tables.length,
+                matchedWidgetCount: matched.length,
+                note:
+                  "Прямой доступ к таблицам модели Visiology через Formula Engine. " +
+                  "selectedTables содержит только строки, совпавшие со значимыми терминами запроса. " +
+                  "derivedFacts содержит вычисленные числовые показатели по отфильтрованным строкам."
               };
-            }),
-            note:
-              "Это прямой доступ к таблицам модели данных Visiology через Formula Engine. " +
-              "selectedTables содержит реальные строки таблиц, их поля, общее количество строк и при наличии matchedBy — фильтрацию по сущности из вопроса."
-          };
 
-          var contextSize = JSON.stringify(context).length;
-          if (contextSize > 70000) {
-            context.selectedTables = context.selectedTables.slice(0, 4).map(function (table) {
-              table.rows = (table.rows || []).slice(0, 18);
-              table.columns = (table.columns || []).slice(0, 25);
-              return table;
-            });
-            context.selectedWidgetData = context.selectedWidgetData.slice(0, 4).map(function (source) {
-              source.rows = (source.rows || []).slice(0, 18);
-              return source;
-            });
-          }
+              postDiagnostic({
+                kind: "data-model-context",
+                version: version,
+                capturedAt: new Date().toISOString(),
+                question: question,
+                dashboardGuid: dashboardGuidForHistory,
+                tableCount: context.tableCount,
+                entityTerms: context.entityTerms,
+                derivedFacts: context.derivedFacts,
+                selectedTables: compactTables.map(function (t) {
+                  return {
+                    name: t.name,
+                    score: t.score,
+                    filteredRows: t.filteredRows,
+                    aggregates: t.aggregates,
+                    matchedBy: t.matchedBy,
+                    rowCount: (t.rows || []).length,
+                    columns: (t.columns || []).map(function (x) { return x.name; })
+                  };
+                })
+              });
 
-          postDiagnostic({
-            kind: "data-model-context",
-            version: version,
-            capturedAt: new Date().toISOString(),
-            question: question,
-            dashboardGuid: dashboardGuidForHistory,
-            tableCount: context.tableCount,
-            entityTerm: context.entityTerm,
-            selectedTables: context.selectedTables.map(function (t) {
-              return {
-                name: t.name,
-                score: t.score,
-                totalRows: t.totalRows,
-                filteredRows: t.filteredRows,
-                matchedBy: t.matchedBy,
-                columns: (t.columns || []).map(function (x) { return x.name; }).slice(0, 40),
-                rowCount: (t.rows || []).length,
-                error: t.error
-              };
-            })
+              return context;
+            });
           });
-
-          return context;
         });
     }
 
@@ -2562,7 +2551,7 @@
           "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
           "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
           "Не выдумывай отсутствующие значения и не предлагай пользователю проверять фильтры, если VISI AI уже получил данные. " +
-          "Если context.mode=data-model, selectedTables — это прямые строки таблиц модели данных Visiology через Formula Engine; используй их как первичный источник фактов. " +
+          "Если context.mode=data-model, selectedTables — это уже отфильтрованные прямые строки таблиц модели Visiology; используй их как первичный источник фактов. derivedFacts — вычисленные агрегаты и имеют приоритет над рассуждениями модели. " +
           "Если у таблицы есть filteredRows и matchedBy, filteredRows — количество строк, соответствующих найденной сущности, а rows — примеры этих строк. " +
           "Если в контексте есть derivedMetrics, считай их приоритетным фактическим представлением карточек дашборда после фильтрации. " +
           "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn. " +
@@ -2575,6 +2564,22 @@
       }
 
       function buildDirectMetricAnswer(ctx) {
+        if (ctx && ctx.mode === "data-model" && Array.isArray(ctx.derivedFacts) && ctx.derivedFacts.length) {
+          var qn = normalizeSearchText(text);
+          var relevantFact = ctx.derivedFacts.filter(function (fact) {
+            var metric = normalizeSearchText(fact.metric || "");
+            if (/раздел/i.test(qn) && /раздел/i.test(metric)) return true;
+            if (/комплект/i.test(qn) && /комплект|документ/i.test(metric)) return true;
+            if (/документ/i.test(qn) && /документ/i.test(metric)) return true;
+            return false;
+          })[0];
+
+          if (relevantFact) {
+            return "### Результат\n**" + relevantFact.metric + ": " + relevantFact.value + "**\n\n" +
+              "Источник: \`" + relevantFact.table + "\` · строк после фильтра: " + relevantFact.filteredRows + ".";
+          }
+        }
+
         if (!ctx || !Array.isArray(ctx.derivedMetrics) || !ctx.derivedMetrics.length) return "";
         if (!/статист|задан|сколько|всего|выполн|просроч|в работе|не начат|истекает срок/i.test(text)) return "";
         if (/покажи|выведи|перечисли|список|детал|все\s+просроч|все\s+выполн/i.test(text)) return "";

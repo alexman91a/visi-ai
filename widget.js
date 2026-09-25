@@ -72,7 +72,7 @@
         '<div style="padding:12px 14px;border-bottom:1px solid #eceff3;display:flex;align-items:center;justify-content:space-between;background:#fafbfc">' +
           '<div><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:11px;color:#6b7280">' + model + '</div></div>' +
           '<div style="display:flex;align-items:center;gap:10px">' +
-            '<button data-role="scan" style="height:30px;padding:0 10px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#111827;font-size:11px;font-weight:700;cursor:pointer">Сканировать лист</button>' +
+            '<button data-role="scan" style="height:30px;padding:0 10px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#111827;font-size:11px;font-weight:700;cursor:pointer">Сканировать дашборд</button>' +
             '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
           '</div>' +
         '</div>' +
@@ -176,111 +176,317 @@
 
     renderPreview();
 
-    function widgetInfo(item, index) {
-      var general = item && item.general ? item.general : {};
-      var guid = item && (item.guid || item.Guid || item.widgetGuid || item.id) || general.guid || general.widgetGuid || "";
-      var type = item && (item.type || item.widgetType) || general.type || "";
-      var title = item && (item.title || item.name || item.caption || item.displayName) || general.title || general.name || "";
+    function getGuid(obj) {
+      if (!obj || typeof obj !== "object") return "";
+      var general = obj.general || {};
+      var candidates = [
+        obj.guid, obj.Guid, obj.widgetGuid, obj.widgetGUID, obj.id, obj.widgetId,
+        general.guid, general.Guid, general.widgetGuid, general.id
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i] !== undefined && candidates[i] !== null && String(candidates[i]).length >= 8) {
+          return String(candidates[i]);
+        }
+      }
+      return "";
+    }
+
+    function getTitle(obj) {
+      if (!obj || typeof obj !== "object") return "";
+      var general = obj.general || {};
+      var candidates = [
+        obj.title, obj.name, obj.caption, obj.displayName, obj.label,
+        general.title, general.name, general.caption
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i] !== undefined && candidates[i] !== null && String(candidates[i]).trim()) {
+          return String(candidates[i]);
+        }
+      }
+      return "";
+    }
+
+    function getType(obj) {
+      if (!obj || typeof obj !== "object") return "";
+      var general = obj.general || {};
+      return String(obj.type || obj.widgetType || obj.visualizationType || general.type || general.widgetType || "");
+    }
+
+    function looksLikeWidget(obj, path) {
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+      var p = String(path || "").toLowerCase();
+      var type = getType(obj).toLowerCase();
+      if (p.indexOf("widget") >= 0 && getGuid(obj)) return true;
+      if (obj.widgetGuid || obj.widgetId || obj.widgetType) return true;
+      if (obj.general && obj.general.type && getGuid(obj)) return true;
+      if (type && getGuid(obj) && (
+        type.indexOf("chart") >= 0 || type.indexOf("table") >= 0 ||
+        type.indexOf("filter") >= 0 || type.indexOf("card") >= 0 ||
+        type.indexOf("userwidget") >= 0 || type.indexOf("map") >= 0 ||
+        type.indexOf("text") >= 0 || type.indexOf("image") >= 0
+      )) return true;
+      return false;
+    }
+
+    function scanDashboardStructure(dashboard) {
+      var widgets = [];
+      var sheets = [];
+      var seenObjects = [];
+      var widgetKeys = {};
+      var sheetKeys = {};
+
+      function addSheet(name, guid, path) {
+        var key = (guid || "") + "|" + (name || "") + "|" + path;
+        if (sheetKeys[key]) return;
+        sheetKeys[key] = true;
+        sheets.push({ name: name || "Лист", guid: guid || "", path: path || "" });
+      }
+
+      function addWidget(obj, path, sheetName, sheetGuid) {
+        var guid = getGuid(obj);
+        var title = getTitle(obj);
+        var type = getType(obj);
+        var key = guid ? guid : path + "|" + title + "|" + type;
+        if (widgetKeys[key]) return;
+        widgetKeys[key] = true;
+        widgets.push({
+          guid: guid,
+          title: title,
+          type: type,
+          sheet: sheetName || "",
+          sheetGuid: sheetGuid || "",
+          path: path
+        });
+      }
+
+      function walk(node, path, sheetName, sheetGuid, depth) {
+        if (depth > 12 || node === null || node === undefined) return;
+        if (typeof node !== "object") return;
+        if (seenObjects.indexOf(node) !== -1) return;
+        seenObjects.push(node);
+
+        if (looksLikeWidget(node, path)) addWidget(node, path, sheetName, sheetGuid);
+
+        if (Array.isArray(node)) {
+          node.forEach(function (child, i) {
+            walk(child, path + "[" + i + "]", sheetName, sheetGuid, depth + 1);
+          });
+          return;
+        }
+
+        Object.keys(node).forEach(function (key) {
+          var value;
+          try { value = node[key]; } catch (_) { return; }
+          var low = key.toLowerCase();
+          var nextPath = path ? path + "." + key : key;
+
+          if (value && typeof value === "object") {
+            if ((low.indexOf("sheet") >= 0 || low === "pages" || low === "tabs") && Array.isArray(value)) {
+              value.forEach(function (sheet, i) {
+                var sn = getTitle(sheet) || ("Лист " + (i + 1));
+                var sg = getGuid(sheet);
+                var sp = nextPath + "[" + i + "]";
+                addSheet(sn, sg, sp);
+                walk(sheet, sp, sn, sg, depth + 1);
+              });
+              return;
+            }
+
+            if ((low.indexOf("widget") >= 0) && Array.isArray(value)) {
+              value.forEach(function (widget, i) {
+                var wp = nextPath + "[" + i + "]";
+                addWidget(widget, wp, sheetName, sheetGuid);
+                walk(widget, wp, sheetName, sheetGuid, depth + 1);
+              });
+              return;
+            }
+          }
+
+          walk(value, nextPath, sheetName, sheetGuid, depth + 1);
+        });
+      }
+
+      walk(dashboard, "dashboard", "", "", 0);
+      return { sheets: sheets, widgets: widgets };
+    }
+
+    function parseUrlIds() {
+      var params = new URLSearchParams(location.search);
       return {
-        index: index + 1,
-        guid: guid ? String(guid) : "",
-        type: type ? String(type) : "",
-        title: title ? String(title) : ""
+        workspaceId: params.get("workspaceId") || "",
+        dashboardGuid: params.get("dashboardGuid") || ""
       };
     }
 
-    function renderWidgetScan(list) {
+    function loadFullDashboard(api) {
+      var getter = api && (api.getDashboard || api.GetDashboard);
+      if (typeof getter === "function") {
+        try {
+          return Promise.resolve(getter.call(api)).then(function (data) {
+            return { source: "visApi.getDashboard", data: data };
+          });
+        } catch (e) {}
+      }
+
+      var ids = parseUrlIds();
+      if (!ids.workspaceId || !ids.dashboardGuid) {
+        return Promise.reject(new Error("Не удалось определить workspaceId/dashboardGuid"));
+      }
+
+      var url = location.origin + "/v3/dashboard-service/api/workspaces/" +
+        encodeURIComponent(ids.workspaceId) + "/dashboards/" +
+        encodeURIComponent(ids.dashboardGuid);
+
+      return fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: { "Accept": "application/json" },
+        cache: "no-store"
+      }).then(function (r) {
+        if (!r.ok) throw new Error("Dashboard API HTTP " + r.status);
+        return r.json();
+      }).then(function (data) {
+        return { source: "dashboard-service REST", data: data };
+      });
+    }
+
+    function renderDashboardScan(scan, source, currentWidgets) {
       scanPanelEl.style.display = "block";
       scanResultsEl.innerHTML = "";
-      scanCountEl.textContent = list.length + " найдено";
 
-      if (!list.length) {
+      var all = scan.widgets || [];
+      var sheets = scan.sheets || [];
+      scanCountEl.textContent =
+        all.length + " виджетов · " + sheets.length + " листов · " + source;
+
+      if (!all.length && (!currentWidgets || !currentWidgets.length)) {
         var empty = document.createElement("div");
-        empty.textContent = "Visiology не вернула список виджетов";
+        empty.textContent = "Структура дашборда получена, но виджеты автоматически не распознаны.";
         empty.style.cssText = "padding:12px;font-size:11px;color:#9ca3af";
         scanResultsEl.appendChild(empty);
         return;
       }
 
-      list.slice(0, 50).forEach(function (item, i) {
-        var info = widgetInfo(item, i);
+      var rows = all.length ? all : currentWidgets.map(function (w, i) {
+        return {
+          guid: getGuid(w),
+          title: getTitle(w),
+          type: getType(w),
+          sheet: "Текущий лист",
+          sheetGuid: "",
+          path: "currentSheet.widgets[" + i + "]"
+        };
+      });
+
+      var lastSheet = null;
+      rows.slice(0, 150).forEach(function (info, i) {
+        var sheetLabel = info.sheet || "Лист не определён";
+        if (sheetLabel !== lastSheet) {
+          var sh = document.createElement("div");
+          sh.textContent = sheetLabel + (info.sheetGuid ? " · " + info.sheetGuid : "");
+          sh.style.cssText = "padding:8px 9px;background:#eef2f7;border-bottom:1px solid #dde3eb;font-size:10px;font-weight:700;color:#374151;position:sticky;top:0";
+          scanResultsEl.appendChild(sh);
+          lastSheet = sheetLabel;
+        }
+
         var row = document.createElement("div");
-        row.style.cssText = "padding:8px 9px;border-bottom:" + (i === Math.min(list.length,50)-1 ? "0" : "1px solid #eceff3") + ";font-size:11px";
-        var top = document.createElement("div");
-        top.style.cssText = "display:flex;gap:8px;align-items:center";
-        var num = document.createElement("span");
-        num.textContent = "#" + info.index;
-        num.style.cssText = "color:#9ca3af;min-width:24px";
-        var label = document.createElement("span");
-        label.textContent = (info.title || info.type || "Виджет") + (info.type && info.title ? " · " + info.type : "");
-        label.style.cssText = "font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-        top.appendChild(num);
-        top.appendChild(label);
+        row.style.cssText = "padding:8px 9px;border-bottom:1px solid #eceff3;font-size:11px";
+
+        var title = document.createElement("div");
+        title.textContent = (info.title || info.type || "Виджет") +
+          (info.type && info.title ? " · " + info.type : "");
+        title.style.cssText = "font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
 
         var guid = document.createElement("div");
-        guid.textContent = info.guid ? "GUID: " + info.guid : "GUID не найден в верхнем уровне объекта";
+        guid.textContent = info.guid ? "GUID: " + info.guid : "GUID не определён";
         guid.style.cssText = "margin-top:3px;color:#6b7280;font-family:Consolas,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
 
-        row.appendChild(top);
+        var path = document.createElement("div");
+        path.textContent = info.path || "";
+        path.style.cssText = "margin-top:2px;color:#9ca3af;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+
+        row.appendChild(title);
         row.appendChild(guid);
+        row.appendChild(path);
         scanResultsEl.appendChild(row);
       });
     }
 
-    function scanSheet() {
+    function scanDashboard() {
       scanEl.disabled = true;
       scanEl.textContent = "Сканирую…";
+      scanPanelEl.style.display = "block";
+      scanCountEl.textContent = "Получаю структуру дашборда…";
+      scanResultsEl.innerHTML = "";
 
       try {
         if (typeof visApi !== "function") throw new Error("visApi() недоступен");
         var api = visApi();
         if (!api) throw new Error("visApi() вернул пустой объект");
 
-        var getter = api.getWidgets || api.GetWidgets;
-        if (typeof getter !== "function") {
-          var methods = Object.keys(api).filter(function (k) { return typeof api[k] === "function"; });
-          throw new Error("getWidgets() не найден. Методы: " + methods.slice(0, 30).join(", "));
-        }
-
-        var result = getter.call(api);
-        Promise.resolve(result).then(function (widgets) {
-          var list = Array.isArray(widgets) ? widgets :
-            widgets && Array.isArray(widgets.items) ? widgets.items :
-            widgets && Array.isArray(widgets.widgets) ? widgets.widgets : [];
-
-          renderWidgetScan(list);
-
-          fetch(endpoint + "/inspect", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              capturedAt: new Date().toISOString(),
-              kind: "sheet-widget-scan",
-              count: list.length,
-              apiMethods: Object.keys(api).filter(function (k) { return typeof api[k] === "function"; }),
-              widgets: safeSnapshot(list, 0, [])
-            })
-          }).catch(function () {});
-        }).catch(function (e) {
-          renderWidgetScan([]);
-          scanCountEl.textContent = "Ошибка: " + e.message;
-        }).finally(function () {
-          scanEl.disabled = false;
-          scanEl.textContent = "Сканировать лист";
+        var methods = Object.keys(api).filter(function (k) {
+          return typeof api[k] === "function";
         });
+
+        var currentGetter = api.getWidgets || api.GetWidgets;
+        var currentPromise = typeof currentGetter === "function"
+          ? Promise.resolve(currentGetter.call(api)).catch(function () { return []; })
+          : Promise.resolve([]);
+
+        Promise.all([loadFullDashboard(api), currentPromise])
+          .then(function (parts) {
+            var full = parts[0];
+            var currentRaw = parts[1];
+            var currentWidgets = Array.isArray(currentRaw) ? currentRaw :
+              currentRaw && Array.isArray(currentRaw.items) ? currentRaw.items :
+              currentRaw && Array.isArray(currentRaw.widgets) ? currentRaw.widgets : [];
+
+            var scan = scanDashboardStructure(full.data);
+            renderDashboardScan(scan, full.source, currentWidgets);
+
+            fetch(endpoint + "/inspect", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                capturedAt: new Date().toISOString(),
+                kind: "dashboard-full-scan",
+                source: full.source,
+                apiMethods: methods,
+                dashboardIds: parseUrlIds(),
+                sheetCount: scan.sheets.length,
+                widgetCount: scan.widgets.length,
+                sheets: scan.sheets,
+                widgets: scan.widgets,
+                currentSheetWidgets: safeSnapshot(currentWidgets, 0, []),
+                dashboardShape: safeSnapshot(full.data, 0, [])
+              })
+            }).catch(function () {});
+          })
+          .catch(function (e) {
+            scanCountEl.textContent = "Ошибка";
+            var err = document.createElement("div");
+            err.textContent = e.message;
+            err.style.cssText = "padding:12px;font-size:11px;color:#b91c1c";
+            scanResultsEl.appendChild(err);
+          })
+          .finally(function () {
+            scanEl.disabled = false;
+            scanEl.textContent = "Сканировать дашборд";
+          });
       } catch (e) {
-        scanPanelEl.style.display = "block";
-        scanResultsEl.innerHTML = '<div style="padding:12px;font-size:11px;color:#b91c1c"></div>';
-        scanResultsEl.firstChild.textContent = e.message;
         scanCountEl.textContent = "Ошибка";
+        var err = document.createElement("div");
+        err.textContent = e.message;
+        err.style.cssText = "padding:12px;font-size:11px;color:#b91c1c";
+        scanResultsEl.appendChild(err);
         scanEl.disabled = false;
-        scanEl.textContent = "Сканировать лист";
+        scanEl.textContent = "Сканировать дашборд";
       }
     }
 
     scanEl.onclick = function (e) {
       e.stopPropagation();
-      scanSheet();
+      scanDashboard();
     };
 
     function addMessage(role, text) {

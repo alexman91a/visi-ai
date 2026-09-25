@@ -257,6 +257,28 @@
     }
 
     function scanDashboardStructure(dashboard) {
+      if (dashboard && Array.isArray(dashboard.sheets)) {
+        var directSheets = [];
+        var directWidgets = [];
+        dashboard.sheets.forEach(function (sheet, si) {
+          var sheetName = smartText(sheet.name, 0) || getTitle(sheet) || ("Лист " + (si + 1));
+          var sheetGuid = getGuid(sheet);
+          var ws = sheet && Array.isArray(sheet.widgets) ? sheet.widgets : [];
+          directSheets.push({ name: sheetName, guid: sheetGuid, path: "dashboard.sheets[" + si + "]" });
+          ws.forEach(function (widget, wi) {
+            directWidgets.push({
+              guid: getGuid(widget),
+              title: getTitle(widget),
+              type: getType(widget),
+              sheet: sheetName,
+              sheetGuid: sheetGuid,
+              path: "dashboard.sheets[" + si + "].widgets[" + wi + "]"
+            });
+          });
+        });
+        return { sheets: directSheets, widgets: directWidgets };
+      }
+
       var widgets = [];
       var sheets = [];
       var seenObjects = [];

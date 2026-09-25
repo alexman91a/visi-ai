@@ -1681,16 +1681,61 @@
         return (
           "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
           "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
-          "Не выдумывай отсутствующие значения. " +
-          "Если в контексте есть derivedMetrics, считай их приоритетным и уже вычисленным представлением карточек дашборда после фильтрации по сущности. " +
-          "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn: sourceColumn может содержать устаревшее или технически перепутанное имя. " +
-          "Если derivedMetrics содержит запрошенные показатели, дай прямой ответ по ним и не утверждай, что статистика отсутствует. " +
+          "Не выдумывай отсутствующие значения и не предлагай пользователю проверять фильтры, если VISI AI уже получил данные. " +
+          "Если в контексте есть derivedMetrics, считай их приоритетным фактическим представлением карточек дашборда после фильтрации. " +
+          "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn. " +
+          "Если filterAction.applied=true, сущность была найдена и фильтр реально применён; не утверждай, что объект отсутствует. " +
+          "При широком аналитическом вопросе ищи конкретные отклонения только в фактически переданных rows/columnSummary и отделяй факт от предположения. " +
           "Ниже передан компактный контекст текущего вопроса.\n\n" + contextJson
         );
       }
 
+      function buildDirectMetricAnswer(ctx) {
+        if (!ctx || !Array.isArray(ctx.derivedMetrics) || !ctx.derivedMetrics.length) return "";
+        if (!/статист|задан|сколько|всего|выполн|просроч|в работе|не начат|истекает срок/i.test(text)) return "";
+
+        var order = ["Всего", "Выполнено", "В работе", "Просрочено", "Не начато", "Истекает срок"];
+        var map = {};
+        ctx.derivedMetrics.forEach(function (metric) {
+          if (metric && metric.label) map[metric.label] = metric.value;
+        });
+
+        var available = order.filter(function (label) {
+          return Object.prototype.hasOwnProperty.call(map, label);
+        });
+        if (available.length < 3) return "";
+
+        var entity = ctx.filterAction && ctx.filterAction.value
+          ? ctx.filterAction.value
+          : (ctx.entityHint || "");
+        var sheet = ctx.filterAction && ctx.filterAction.sheet
+          ? ctx.filterAction.sheet
+          : (ctx.requestedSheet && ctx.requestedSheet[0] ? ctx.requestedSheet[0] : "");
+
+        var out = "### Статистика по заданиям";
+        if (entity) out += "\n**Объект:** " + entity;
+        if (sheet) out += "\n**Лист:** " + sheet;
+        out += "\n\n| Показатель | Значение |\n|---|---:|";
+        available.forEach(function (label) {
+          out += "\n| " + label + " | **" + map[label] + "** |";
+        });
+        return out;
+      }
+
       function requestChat(targetEndpoint) {
         var latestHistory = loadSavedHistory();
+        var priorUserMessages = latestHistory.filter(function (m) {
+          return m.role === "user";
+        });
+        var usePrior = text.length < 45 || /^(а\b|а по|теперь|сравни|что насчет|что по|а если)/i.test(text);
+        var userMessages = usePrior
+          ? priorUserMessages.slice(-3)
+          : [{ role: "user", content: text }];
+
+        if (!userMessages.length || userMessages[userMessages.length - 1].content !== text) {
+          userMessages.push({ role: "user", content: text });
+        }
+
         return fetch(targetEndpoint + "/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1701,7 +1746,7 @@
                 role: "system",
                 content: makeSystemPrompt()
               }
-            ].concat(latestHistory.slice(-24))
+            ].concat(userMessages)
           })
         }).then(function (r) {
           if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1727,6 +1772,12 @@
         } catch (_) {
           contextObject = null;
           renderAnswerData(null, text);
+        }
+
+        var directAnswer = buildDirectMetricAnswer(contextObject);
+        if (directAnswer) {
+          waitBubble.setText("Формирую ответ по полученным показателям…");
+          return Promise.resolve({ message: { content: directAnswer }, direct: true });
         }
 
         waitBubble.setText("Анализирую данные…");

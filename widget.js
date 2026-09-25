@@ -146,52 +146,91 @@
       return [String(k === undefined ? "" : k), String(v === undefined ? "" : v)];
     }
 
-    function renderPreview() {
-      var items = primaryData && Array.isArray(primaryData.items) ? primaryData.items : [];
+    function renderAnswerData(context, question) {
       previewEl.innerHTML = "";
-      previewCountEl.textContent = rowCount + " строк · показаны первые " + Math.min(items.length, 8);
 
-      var head = document.createElement("div");
-      head.style.cssText = "display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:8px;padding:7px 9px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#6b7280";
-      var h1 = document.createElement("div");
-      h1.textContent = "Измерение";
-      var h2 = document.createElement("div");
-      h2.textContent = "Показатель";
-      head.appendChild(h1);
-      head.appendChild(h2);
-      previewEl.appendChild(head);
-
-      if (!items.length) {
+      if (!context) {
+        previewCountEl.textContent = "ожидает вопрос";
         var empty = document.createElement("div");
-        empty.textContent = "К виджету пока не подключены данные";
-        empty.style.cssText = "padding:12px;font-size:11px;color:#9ca3af";
+        empty.textContent = "После запроса здесь появятся виджеты и строки данных, которые VISI AI передал модели для ответа.";
+        empty.style.cssText = "padding:11px;font-size:10px;line-height:1.4;color:#9ca3af";
         previewEl.appendChild(empty);
         return;
       }
 
-      items.slice(0, 8).forEach(function (item, i) {
-        var pair = rowPair(item);
-        var row = document.createElement("div");
-        row.style.cssText = "display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:8px;padding:7px 9px;border-bottom:" + (i === Math.min(items.length,8)-1 ? "0" : "1px solid #eceff3") + ";font-size:11px";
-        var a = document.createElement("div");
-        a.textContent = pair[0] || "—";
-        a.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-        var b = document.createElement("div");
-        b.textContent = pair[1] || "—";
-        b.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600";
-        row.style.cursor = "pointer";
-        row.title = "Нажмите, чтобы скопировать строку";
-        row.onclick = function (e) {
-          e.stopPropagation();
-          copyValue((pair[0] || "—") + "\t" + (pair[1] || "—"));
-        };
-        row.appendChild(a);
-        row.appendChild(b);
-        previewEl.appendChild(row);
+      var sources = Array.isArray(context.selectedWidgetData) ? context.selectedWidgetData : [];
+      var searched = context.searchedWidgetCount || 0;
+      var matched = context.matchedWidgetCount || 0;
+      previewCountEl.textContent = searched + " проверено · " + matched + " совпадений";
+
+      if (question) {
+        var q = document.createElement("div");
+        q.style.cssText = "padding:7px 9px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;font-size:10px;color:#4b5563";
+        q.innerHTML = "<b>Запрос:</b> " + escapeChatHtml(question);
+        previewEl.appendChild(q);
+      }
+
+      if (!sources.length) {
+        var noData = document.createElement("div");
+        noData.textContent = "Подходящие данные из других виджетов для этого ответа не получены.";
+        noData.style.cssText = "padding:11px;font-size:10px;color:#9ca3af";
+        previewEl.appendChild(noData);
+        return;
+      }
+
+      sources.slice(0, 12).forEach(function (source) {
+        var info = source.info || {};
+        var targeted = source.data || {};
+        var matches = Array.isArray(targeted.matches) ? targeted.matches : [];
+
+        var card = document.createElement("div");
+        card.style.cssText = "padding:8px 9px;border-bottom:1px solid #eceff3;font-size:10px";
+
+        var head = document.createElement("div");
+        head.style.cssText = "display:flex;align-items:flex-start;justify-content:space-between;gap:8px";
+
+        var sourceName = document.createElement("div");
+        sourceName.style.cssText = "font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        sourceName.textContent = (info.sheet ? info.sheet + " · " : "") + (info.title || info.type || "Виджет");
+
+        var badge = document.createElement("div");
+        badge.style.cssText = "white-space:nowrap;color:#6b7280;font-size:9px";
+        badge.textContent = source.error ? "ошибка" : (matches.length ? matches.length + " совп." : "данные");
+
+        head.appendChild(sourceName);
+        head.appendChild(badge);
+        card.appendChild(head);
+
+        if (source.error) {
+          var err = document.createElement("div");
+          err.textContent = source.error;
+          err.style.cssText = "margin-top:4px;color:#b91c1c";
+          card.appendChild(err);
+        } else if (matches.length) {
+          matches.slice(0, 3).forEach(function (match) {
+            var row = document.createElement("div");
+            var valueText = match && match.text ? String(match.text) : "";
+            row.textContent = valueText || (match && match.path ? match.path : "Совпадение");
+            row.style.cssText = "margin-top:5px;padding:5px 6px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;color:#374151;line-height:1.35;cursor:pointer;max-height:44px;overflow:hidden";
+            row.title = "Нажмите, чтобы скопировать значение";
+            row.onclick = function (e) {
+              e.stopPropagation();
+              copyValue(valueText || JSON.stringify(match && match.value ? match.value : match));
+            };
+            card.appendChild(row);
+          });
+        } else {
+          var note = document.createElement("div");
+          note.textContent = "Совпадение по тексту не найдено; модели передан обзор данных этого виджета.";
+          note.style.cssText = "margin-top:4px;color:#9ca3af";
+          card.appendChild(note);
+        }
+
+        previewEl.appendChild(card);
       });
     }
 
-    renderPreview();
+    renderAnswerData(null, "");
 
     function getGuid(obj) {
       if (!obj || typeof obj !== "object") return "";

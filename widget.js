@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.6";
+    var version = "0.8.7";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -15,7 +15,7 @@
     }
     var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
     var pendingKey = "visi-ai-pending:" + dashboardGuidForHistory;
-    var sessionContextKey = "visi-ai-session-context:" + dashboardGuidForHistory;
+    var sessionContextKey = "visi-ai-session-context-v2:" + dashboardGuidForHistory;
     var history = [];
     var historySignature = "";
     var lastDiagnostic = null;
@@ -876,11 +876,16 @@
 
       if (/сброс.*контекст|нов(?:ый|ая|ое).*тема|друг(?:ой|ая|ое).*объект/i.test(normalized)) return false;
 
-      var followup =
-        /^(а |и |теперь |покажи|выведи|дай|перечисли|какие|кто|что |сколько|почему|подробнее|раскрой|расшифруй|сравни|найди все|все )/i.test(normalized) ||
-        /(из них|по ним|по нему|по ней|эти|этим|этого|данные по|просроч|выполн|не начат|в работе|истекает срок|список|детал)/i.test(normalized);
+      // Явно самостоятельные бытовые/общие вопросы не должны наследовать BI-контекст.
+      if (/(который час|сколько сейчас времени|текущее время|какая сегодня дата|какое сегодня число|погод|курс валют|кто такой|что такое)/i.test(normalized)) {
+        return false;
+      }
 
-      return followup || words.length <= 6;
+      var explicitFollowup =
+        /^(а |и |теперь |покажи|выведи|дай|перечисли|подробнее|раскрой|расшифруй|сравни|найди все|все )/i.test(normalized) ||
+        /(из них|по ним|по нему|по ней|эти|этим|этого|эта выборка|текущий объект|текущая линия|просроч|выполн|не начат|в работе|истекает срок|список|детал|остальн|кто отвечает|ответственн)/i.test(normalized);
+
+      return explicitFollowup;
     }
 
     function buildAnalysisQuestion(question) {

@@ -148,6 +148,44 @@
       autoFollowChat = isChatNearBottom();
     }, { passive: true });
 
+    var previewExpanded = false;
+
+    function setPreviewExpanded(expanded) {
+      previewExpanded = !!expanded;
+      previewWrapEl.style.display = previewExpanded ? "block" : "none";
+      previewArrowEl.textContent = previewExpanded ? "▴" : "▾";
+    }
+
+    previewToggleEl.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      setPreviewExpanded(!previewExpanded);
+    }, true);
+
+    previewToggleEl.addEventListener("pointerdown", function (e) {
+      e.stopPropagation();
+    }, true);
+
+    setPreviewExpanded(false);
+
+    function updatePendingUi() {
+      var pending = getPendingState();
+      if (pending) {
+        pendingBannerEl.style.display = "block";
+        pendingBannerEl.textContent = "● Запрос выполняется: " + pending.question;
+        sendEl.disabled = true;
+        inputEl.disabled = true;
+        sendEl.style.opacity = ".55";
+        sendEl.textContent = "Выполняется…";
+      } else {
+        pendingBannerEl.style.display = "none";
+        sendEl.disabled = false;
+        inputEl.disabled = false;
+        sendEl.style.opacity = "1";
+        sendEl.textContent = "Отправить";
+      }
+    }
+
     function firstValue(v) {
       if (Array.isArray(v)) return v.length ? v[0] : "";
       if (v === null || v === undefined) return "";
@@ -481,78 +519,19 @@
     }
 
     function renderDashboardScan(scan, source, currentWidgets) {
-      scanPanelEl.style.display = "block";
-      scanResultsEl.innerHTML = "";
-
       var all = scan.widgets || [];
       var sheets = scan.sheets || [];
+      var widgetCount = all.length || (currentWidgets ? currentWidgets.length : 0);
+      scanPanelEl.style.display = "block";
       scanCountEl.textContent =
-        all.length + " виджетов · " + sheets.length + " листов · " + source;
-
-      if (!all.length && (!currentWidgets || !currentWidgets.length)) {
-        var empty = document.createElement("div");
-        empty.textContent = "Структура дашборда получена, но виджеты автоматически не распознаны.";
-        empty.style.cssText = "padding:12px;font-size:11px;color:#9ca3af";
-        scanResultsEl.appendChild(empty);
-        return;
-      }
-
-      var rows = all.length ? all : currentWidgets.map(function (w, i) {
-        return {
-          guid: getGuid(w),
-          title: getTitle(w),
-          type: getType(w),
-          sheet: "Текущий лист",
-          sheetGuid: "",
-          path: "currentSheet.widgets[" + i + "]"
-        };
-      });
-
-      var lastSheet = null;
-      rows.slice(0, 150).forEach(function (info, i) {
-        var sheetLabel = info.sheet || "Лист не определён";
-        if (sheetLabel !== lastSheet) {
-          var sh = document.createElement("div");
-          sh.textContent = sheetLabel + (info.sheetGuid ? " · " + info.sheetGuid : "");
-          sh.style.cssText = "padding:8px 9px;background:#eef2f7;border-bottom:1px solid #dde3eb;font-size:10px;font-weight:700;color:#374151;position:sticky;top:0";
-          scanResultsEl.appendChild(sh);
-          lastSheet = sheetLabel;
-        }
-
-        var row = document.createElement("div");
-        row.style.cssText = "padding:8px 9px;border-bottom:1px solid #eceff3;font-size:11px";
-
-        var title = document.createElement("div");
-        title.textContent = (info.title || info.type || "Виджет") +
-          (info.type && info.title ? " · " + info.type : "");
-        title.style.cssText = "font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-
-        var guid = document.createElement("div");
-        guid.textContent = info.guid ? "GUID: " + info.guid : "GUID не определён";
-        guid.style.cssText = "margin-top:3px;color:#6b7280;font-family:Consolas,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer";
-        guid.title = info.guid ? "Нажмите, чтобы скопировать GUID" : "";
-        guid.onclick = function (e) {
-          e.stopPropagation();
-          if (info.guid) copyValue(info.guid);
-        };
-
-        var path = document.createElement("div");
-        path.textContent = info.path || "";
-        path.style.cssText = "margin-top:2px;color:#9ca3af;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-
-        row.appendChild(title);
-        row.appendChild(guid);
-        row.appendChild(path);
-        scanResultsEl.appendChild(row);
-      });
+        "Просканировано: " + widgetCount + " виджетов · " + sheets.length + " листов";
     }
 
     function scanDashboard() {
       scanEl.disabled = true;
       scanEl.textContent = "Сканирую…";
       scanPanelEl.style.display = "block";
-      scanCountEl.textContent = "Получаю структуру дашборда…";
-      scanResultsEl.innerHTML = "";
+      scanCountEl.textContent = "Сканирую структуру дашборда…";
 
       try {
         if (typeof visApi !== "function") throw new Error("visApi() недоступен");
@@ -598,22 +577,14 @@
             }).catch(function () {});
           })
           .catch(function (e) {
-            scanCountEl.textContent = "Ошибка";
-            var err = document.createElement("div");
-            err.textContent = e.message;
-            err.style.cssText = "padding:12px;font-size:11px;color:#b91c1c";
-            scanResultsEl.appendChild(err);
+            scanCountEl.textContent = "Ошибка сканирования: " + e.message;
           })
           .finally(function () {
             scanEl.disabled = false;
             scanEl.textContent = "Сканировать дашборд";
           });
       } catch (e) {
-        scanCountEl.textContent = "Ошибка";
-        var err = document.createElement("div");
-        err.textContent = e.message;
-        err.style.cssText = "padding:12px;font-size:11px;color:#b91c1c";
-        scanResultsEl.appendChild(err);
+        scanCountEl.textContent = "Ошибка сканирования: " + e.message;
         scanEl.disabled = false;
         scanEl.textContent = "Сканировать дашборд";
       }

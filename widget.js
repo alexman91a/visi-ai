@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.7.0";
+    var version = "0.7.1";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -980,8 +980,11 @@
           return sn && (q.indexOf(sn) >= 0 || tokens.some(function (t) { return sn.indexOf(t) >= 0; }));
         });
 
+        var aiWidgetGuid = w && w.general ? String(w.general.guid || w.general.renderTo || "") : "";
         var nonDecorative = widgetIndex.filter(function (item) {
-          return item.guid && !/imagewidget|textwidget|userwidget/i.test(item.type);
+          if (!item.guid) return false;
+          if (aiWidgetGuid && item.guid === aiWidgetGuid) return false;
+          return !/imagewidget|textwidget/i.test(item.type);
         });
 
         var pool;

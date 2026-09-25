@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.5";
+    var version = "0.8.6";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -1511,6 +1511,15 @@
           }
 
           var roots = tokens.map(tokenRoot).filter(function (x) { return x.length >= 4; });
+          var genericRoots = {
+            "проблем":1,"вопрос":1,"лини":1,"метр":1,"задач":1,"задан":1,
+            "статистик":1,"объект":1,"проект":1,"данн":1,"показател":1,
+            "статус":1,"просроч":1,"выполн":1,"работ":1,"срок":1,"начат":1,
+            "информац":1,"сведен":1,"покаж":1,"собер":1,"найд":1
+          };
+          var distinctiveRoots = (strongTokens.length ? strongTokens : roots.filter(function (root) {
+            return !genericRoots[root];
+          }));
 
           function sheetAffinity(sheetGuid) {
             var score = 0;
@@ -1545,15 +1554,18 @@
               return candidates.indexOf(value) === idx;
             });
 
-            var targetRoots = strongTokens.length ? strongTokens : roots;
+            var targetRoots = distinctiveRoots.length ? distinctiveRoots : (strongTokens.length ? strongTokens : roots);
             candidates.sort(function (a, b) {
               function score(value) {
                 var s = 0;
                 targetRoots.forEach(function (rootToken) {
-                  if (normalizedContainsToken(value, rootToken)) s += 20;
+                  if (normalizedContainsToken(value, rootToken)) s += 35;
                 });
-                if (entityHint && normalizeSearchText(value) === normalizeSearchText(entityHint)) s += 50;
-                s -= Math.min(String(value).length / 80, 5);
+                roots.forEach(function (rootToken) {
+                  if (normalizedContainsToken(value, rootToken)) s += 3;
+                });
+                if (entityHint && normalizeSearchText(value) === normalizeSearchText(entityHint)) s += 60;
+                s -= Math.min(String(value).length / 100, 4);
                 return s;
               }
               return score(b) - score(a);
@@ -1573,16 +1585,37 @@
                 var targeted = targetedDataSnapshot(data, question);
                 var best = targeted.matches && targeted.matches.length ? targeted.matches[0] : null;
                 var normalizedTitle = normalizeSearchText(filterInfo.title);
-                var titleBonus = /наименование.*объект|объект|подобъект/i.test(normalizedTitle) ? 25 : 0;
+                var titleBonus = 0;
+                roots.forEach(function (rootToken) {
+                  if (normalizedContainsToken(normalizedTitle, rootToken)) titleBonus += 18;
+                });
+                if (/объект|подобъект/i.test(normalizedTitle) && /объект|подобъект/i.test(q)) titleBonus += 18;
+
+                var sheetMeta = sheetIndex.filter(function (sheet) {
+                  return sheet.guid === filterInfo.sheetGuid;
+                })[0];
+                var visibilityBonus = sheetMeta && !sheetMeta.hidden ? 12 : -4;
+
                 var affinityBonus = sheetAffinity(filterInfo.sheetGuid) * 2;
                 var intentBonus = intentSheetBonus(filterInfo.sheetGuid);
                 var filterValue = best ? pickFilterValue(best) : "";
+
+                var distinctiveHits = 0;
+                distinctiveRoots.forEach(function (rootToken) {
+                  if (normalizedContainsToken(filterValue, rootToken)) distinctiveHits++;
+                });
+                var distinctiveBonus = distinctiveHits * 45;
+                var distinctivePenalty = distinctiveRoots.length && distinctiveHits === 0 ? -80 : 0;
+
                 return {
                   info: filterInfo,
                   targeted: targeted,
-                  score: best ? best.score + titleBonus + affinityBonus + intentBonus : 0,
+                  score: best
+                    ? best.score + titleBonus + visibilityBonus + affinityBonus + intentBonus + distinctiveBonus + distinctivePenalty
+                    : 0,
                   best: best,
-                  filterValue: filterValue
+                  filterValue: filterValue,
+                  distinctiveHits: distinctiveHits
                 };
               })
               .catch(function () {
@@ -1597,7 +1630,7 @@
                 applied: false,
                 reason: "Подходящий фильтр сущности не найден",
                 candidates: candidates.slice(0, 5).map(function (x) {
-                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue };
+                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue, distinctiveHits: x.distinctiveHits || 0 };
                 })
               };
             }
@@ -1844,6 +1877,7 @@
           "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn. " +
           "Если filterAction.applied=true, сущность была найдена и фильтр реально применён; не утверждай, что объект отсутствует. " +
           "При широком аналитическом вопросе ищи конкретные отклонения только в фактически переданных rows/columnSummary и отделяй факт от предположения. " +
+          "Если вопрос про проблемы, в первую очередь анализируй источники с названиями «Проблемные вопросы», «Задачи», «Проблемы» или близкими по смыслу после применения найденного фильтра. " +
           "Если это продолжение предыдущего запроса, сохраняй объект и лист из filterAction/context и трактуй слова «все», «их», «эти», «просроченные» как относящиеся к текущей сущности, а не ко всему дашборду. " +
           "Ниже передан компактный контекст текущего вопроса.\n\n" + contextJson
         );

@@ -1485,9 +1485,9 @@
 
           scored.sort(function (a, b) { return b.score - a.score; });
 
-          var selected = explicitSheets.length
-            ? scored.slice(0, Math.min(scored.length, 40)).map(function (x) { return x.item; })
-            : scored.slice(0, 20).map(function (x) { return x.item; });
+          var broadAnalysis = /аномал|отклон|проблем|риск|обратить внимание|сводн|общ.*анализ|проанализ/i.test(question);
+          var selectedLimit = (explicitSheets.length || filterAction.applied) ? 40 : (broadAnalysis ? 55 : 24);
+          var selected = scored.slice(0, Math.min(scored.length, selectedLimit)).map(function (x) { return x.item; });
 
           return Promise.all(selected.map(getData)).then(function (allWidgetData) {
             var restorePromise = Promise.resolve();
@@ -1496,16 +1496,39 @@
             }
 
             return restorePromise.then(function () {
-              allWidgetData.sort(function (a, b) { return (b.relevance || 0) - (a.relevance || 0); });
+              allWidgetData.forEach(function (item) {
+                var rows = Array.isArray(item.rows) ? item.rows : [];
+                var summaryKeys = item.columnSummary ? Object.keys(item.columnSummary) : [];
+                var numericSignals = 0;
+                rows.slice(0, 40).forEach(function (row) {
+                  Object.keys(row || {}).forEach(function (key) {
+                    var value = row[key];
+                    if (value !== null && value !== "" && !isNaN(Number(String(value).replace(",", ".")))) {
+                      numericSignals++;
+                    }
+                  });
+                });
+                item.analysisScore =
+                  (item.relevance || 0) +
+                  Math.min(rows.length, 20) +
+                  Math.min(summaryKeys.length * 2, 12) +
+                  Math.min(numericSignals, 10);
+              });
+
+              allWidgetData.sort(function (a, b) {
+                return (b.analysisScore || 0) - (a.analysisScore || 0);
+              });
 
               var matched = allWidgetData.filter(function (x) { return (x.relevance || 0) > 0; });
               var ownTargeted = targetedDataSnapshot(w && w.data ? w.data.primaryData : null, question);
 
               var dataToSend;
-              if (explicitSheets.length) {
+              if (explicitSheets.length || filterAction.applied) {
                 dataToSend = allWidgetData.slice(0, 30);
+              } else if (broadAnalysis) {
+                dataToSend = allWidgetData.slice(0, 22);
               } else {
-                dataToSend = matched.length ? matched.slice(0, 16) : allWidgetData.slice(0, 12);
+                dataToSend = matched.length ? matched.slice(0, 18) : allWidgetData.slice(0, 14);
               }
 
               function deriveMetric(item) {

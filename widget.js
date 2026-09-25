@@ -517,20 +517,144 @@
       scanDashboard();
     };
 
+    function escapeChatHtml(value) {
+      return String(value == null ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function renderMarkdown(text) {
+      var lines = String(text == null ? "" : text).split(/\r?\n/);
+      var html = [];
+      var inUl = false;
+      var inOl = false;
+
+      function inline(s) {
+        var x = escapeChatHtml(s);
+        x = x.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:none">$1</a>');
+        x = x.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        x = x.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+        x = x.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+        return x;
+      }
+
+      function closeLists() {
+        if (inUl) { html.push("</ul>"); inUl = false; }
+        if (inOl) { html.push("</ol>"); inOl = false; }
+      }
+
+      for (var mi = 0; mi < lines.length; mi++) {
+        var line = lines[mi];
+
+        if (line.indexOf("|") >= 0 && mi + 1 < lines.length &&
+            /^\s*\|?\s*:?-{3,}[^\n]*\|/.test(lines[mi + 1])) {
+          closeLists();
+          function cells(row) {
+            return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (x) { return x.trim(); });
+          }
+          var headers = cells(line);
+          mi += 2;
+          var rows = [];
+          while (mi < lines.length && lines[mi].indexOf("|") >= 0 && lines[mi].trim()) {
+            rows.push(cells(lines[mi]));
+            mi++;
+          }
+          mi--;
+          var table = '<div style="overflow:auto;margin:7px 0"><table style="border-collapse:collapse;width:100%;font-size:11px"><thead><tr>';
+          headers.forEach(function (h) {
+            table += '<th style="text-align:left;padding:5px 6px;border:1px solid #d1d5db;background:#e5e7eb">' + inline(h) + "</th>";
+          });
+          table += "</tr></thead><tbody>";
+          rows.forEach(function (r) {
+            table += "<tr>";
+            headers.forEach(function (_, idx) {
+              table += '<td style="padding:5px 6px;border:1px solid #d1d5db;vertical-align:top">' + inline(r[idx] || "") + "</td>";
+            });
+            table += "</tr>";
+          });
+          table += "</tbody></table></div>";
+          html.push(table);
+          continue;
+        }
+
+        if (/^\s*[-*+]\s+/.test(line)) {
+          if (inOl) { html.push("</ol>"); inOl = false; }
+          if (!inUl) { html.push('<ul style="margin:4px 0 4px 18px;padding:0">'); inUl = true; }
+          html.push("<li>" + inline(line.replace(/^\s*[-*+]\s+/, "")) + "</li>");
+          continue;
+        }
+
+        if (/^\s*\d+\.\s+/.test(line)) {
+          if (inUl) { html.push("</ul>"); inUl = false; }
+          if (!inOl) { html.push('<ol style="margin:4px 0 4px 18px;padding:0">'); inOl = true; }
+          html.push("<li>" + inline(line.replace(/^\s*\d+\.\s+/, "")) + "</li>");
+          continue;
+        }
+
+        closeLists();
+
+        if (!line.trim()) html.push('<div style="height:5px"></div>');
+        else if (/^###\s+/.test(line)) html.push('<div style="font-size:13px;font-weight:700;margin:7px 0 3px">' + inline(line.replace(/^###\s+/, "")) + "</div>");
+        else if (/^##\s+/.test(line)) html.push('<div style="font-size:14px;font-weight:700;margin:7px 0 3px">' + inline(line.replace(/^##\s+/, "")) + "</div>");
+        else if (/^#\s+/.test(line)) html.push('<div style="font-size:15px;font-weight:800;margin:7px 0 3px">' + inline(line.replace(/^#\s+/, "")) + "</div>");
+        else if (/^>\s?/.test(line)) html.push('<div style="border-left:3px solid #d1d5db;padding-left:8px;color:#4b5563;margin:4px 0">' + inline(line.replace(/^>\s?/, "")) + "</div>");
+        else html.push('<div style="margin:2px 0">' + inline(line) + "</div>");
+      }
+
+      closeLists();
+      return html.join("");
+    }
+
+    function copyValue(value, button) {
+      var done = function () {
+        if (!button) return;
+        var old = button.textContent;
+        button.textContent = "Скопировано";
+        setTimeout(function () { button.textContent = old; }, 900);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(String(value)).then(done).catch(function () {});
+      }
+    }
+
     function addMessage(role, text) {
       var row = document.createElement("div");
       row.style.cssText = "display:flex;justify-content:" + (role === "user" ? "flex-end" : "flex-start");
+      var wrap = document.createElement("div");
+      wrap.style.cssText = "max-width:88%;min-width:0";
       var bubble = document.createElement("div");
       bubble.style.cssText =
-        "max-width:82%;padding:9px 11px;border-radius:12px;font-size:13px;line-height:1.4;white-space:pre-wrap;word-break:break-word;" +
+        "padding:9px 11px;border-radius:12px;font-size:13px;line-height:1.4;word-break:break-word;" +
         (role === "user"
-          ? "background:#111827;color:#fff;border-bottom-right-radius:4px"
+          ? "background:#111827;color:#fff;border-bottom-right-radius:4px;white-space:pre-wrap"
           : "background:#f3f4f6;color:#111827;border-bottom-left-radius:4px");
-      bubble.textContent = text;
-      row.appendChild(bubble);
+      if (role === "assistant") bubble.innerHTML = renderMarkdown(text);
+      else bubble.textContent = text;
+
+      var copy = document.createElement("button");
+      copy.textContent = "Копировать";
+      copy.style.cssText = "border:0;background:transparent;color:#9ca3af;font-size:9px;padding:2px 3px;cursor:pointer";
+      copy.onclick = function (e) {
+        e.stopPropagation();
+        copyValue(text, copy);
+      };
+
+      wrap.appendChild(bubble);
+      wrap.appendChild(copy);
+      row.appendChild(wrap);
       messagesEl.appendChild(row);
       messagesEl.scrollTop = messagesEl.scrollHeight;
-      return bubble;
+
+      return {
+        setText: function (next) {
+          text = next;
+          if (role === "assistant") bubble.innerHTML = renderMarkdown(next);
+          else bubble.textContent = next;
+        }
+      };
     }
 
     function setBusy(busy) {

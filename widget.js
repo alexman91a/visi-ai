@@ -808,6 +808,115 @@
       }
     }
 
+    function loadSessionContext() {
+      try {
+        var raw = localStorage.getItem(sessionContextKey);
+        if (!raw) return null;
+        var ctx = JSON.parse(raw);
+        if (!ctx || (!ctx.entity && !ctx.sheet)) return null;
+        return ctx;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function saveSessionContextFromAnswer(ctx, question) {
+      if (!ctx || typeof ctx !== "object") return;
+      var filter = ctx.filterAction || {};
+      var entity = filter.value || ctx.entityHint || "";
+      var sheet = filter.sheet || (ctx.requestedSheet && ctx.requestedSheet[0]) || "";
+      var sheetGuid = filter.sheetGuid || "";
+
+      if (!entity && !sheet) return;
+
+      var session = {
+        entity: entity,
+        sheet: sheet,
+        sheetGuid: sheetGuid,
+        filterGuid: filter.guid || "",
+        lastQuestion: question || "",
+        updatedAt: Date.now()
+      };
+
+      try {
+        localStorage.setItem(sessionContextKey, JSON.stringify(session));
+      } catch (_) {}
+      renderSessionContextUi();
+    }
+
+    function clearSessionContext() {
+      try { localStorage.removeItem(sessionContextKey); } catch (_) {}
+      renderSessionContextUi();
+    }
+
+    function renderSessionContextUi() {
+      var ctx = loadSessionContext();
+      if (!ctx) {
+        sessionContextBarEl.style.display = "none";
+        sessionContextTextEl.textContent = "";
+        return;
+      }
+
+      var parts = [];
+      if (ctx.entity) parts.push(ctx.entity);
+      if (ctx.sheet) parts.push(ctx.sheet);
+      sessionContextTextEl.textContent = parts.join(" · ");
+      sessionContextBarEl.style.display = "block";
+    }
+
+    function shouldInheritSessionContext(question) {
+      var ctx = loadSessionContext();
+      if (!ctx || !ctx.entity) return false;
+
+      if (extractEntityHint(question)) return false;
+
+      var normalized = normalizeSearchText(question);
+      var words = normalized ? normalized.split(/\s+/).filter(Boolean) : [];
+      if (!words.length) return false;
+
+      if (/сброс.*контекст|нов(?:ый|ая|ое).*тема|друг(?:ой|ая|ое).*объект/i.test(normalized)) return false;
+
+      var followup =
+        /^(а |и |теперь |покажи|выведи|дай|перечисли|какие|кто|что |сколько|почему|подробнее|раскрой|расшифруй|сравни|найди все|все )/i.test(normalized) ||
+        /(из них|по ним|по нему|по ней|эти|этим|этого|данные по|просроч|выполн|не начат|в работе|истекает срок|список|детал)/i.test(normalized);
+
+      return followup || words.length <= 6;
+    }
+
+    function buildAnalysisQuestion(question) {
+      var ctx = loadSessionContext();
+      if (!ctx || !shouldInheritSessionContext(question)) {
+        return {
+          text: question,
+          inherited: false,
+          context: null
+        };
+      }
+
+      var suffix = "\n\nКонтекст предыдущего запроса: ";
+      if (ctx.entity) suffix += "объект «" + ctx.entity + "». ";
+      if (ctx.sheet) suffix += "Используй лист «" + ctx.sheet + "». ";
+      suffix += "Это продолжение предыдущего вопроса; сохраняй эту сущность и область анализа, пока пользователь явно не задаст новую.";
+
+      return {
+        text: question + suffix,
+        inherited: true,
+        context: ctx
+      };
+    }
+
+    sessionContextClearEl.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearSessionContext();
+    };
+
+    sessionContextClearEl.addEventListener("pointerdown", function (e) {
+      e.stopPropagation();
+    }, true);
+
+    renderSessionContextUi();
+
     function getPendingState() {
       try {
         var raw = localStorage.getItem(pendingKey);
@@ -826,7 +935,7 @@
 
     function storageStateSignature() {
       try {
-        return (localStorage.getItem(historyKey) || "") + "|" + (localStorage.getItem(pendingKey) || "");
+        return (localStorage.getItem(historyKey) || "") + "|" + (localStorage.getItem(pendingKey) || "") + "|" + (localStorage.getItem(sessionContextKey) || "");
       } catch (_) {
         return String(Date.now());
       }
@@ -890,6 +999,7 @@
 
       historySignature = storageStateSignature();
       updatePendingUi();
+      renderSessionContextUi();
       scrollChatToBottom(true);
     }
 
@@ -900,6 +1010,7 @@
       try {
         localStorage.removeItem(historyKey);
         localStorage.removeItem(pendingKey);
+        localStorage.removeItem(sessionContextKey);
       } catch (_) {}
       renderHistoryState(false);
       addMessage("assistant", "История запросов очищена.");

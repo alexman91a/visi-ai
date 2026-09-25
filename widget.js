@@ -968,23 +968,44 @@
       return out;
     }
 
+    function tokenRoot(token) {
+      var t = normalizeSearchText(token);
+      if (t.length <= 5) return t;
+      return t.replace(/(иями|ями|ами|ого|ему|ому|ыми|ими|ая|яя|ое|ее|ые|ие|ой|ей|ам|ям|ах|ях|ом|ем|ам|ям|ов|ев|ей|ы|и|а|я|у|ю|е|о)$/i, "");
+    }
+
+    function normalizedContainsToken(text, token) {
+      var normalized = normalizeSearchText(text);
+      var root = tokenRoot(token);
+      if (!root) return false;
+      if (normalized.indexOf(root) >= 0) return true;
+      return normalized.split(/\s+/).some(function (word) {
+        return tokenRoot(word) === root;
+      });
+    }
+
     function extractEntityHint(question) {
       var raw = String(question || "");
       var value = "";
 
-      var guillemet = raw.match(/объект\s+«([\s\S]*?)»/i);
-      if (guillemet && guillemet[1]) {
-        value = guillemet[1];
-      }
+      var guillemet = raw.match(/объект(?:у|а|е|ом)?\s+«([\s\S]*?)»/i);
+      if (guillemet && guillemet[1]) value = guillemet[1];
 
       if (!value) {
-        var quoted = raw.match(/объект\s+["“]([\s\S]*?)["”]/i);
+        var quoted = raw.match(/объект(?:у|а|е|ом)?\s+["“]([\s\S]*?)["”]/i);
         if (quoted && quoted[1]) value = quoted[1];
       }
 
       if (!value) {
-        var plain = raw.match(/объект\s+(.+?)(?=\.\s|\?\s*$|$)/i);
+        var plain = raw.match(/объект(?:у|а|е|ом)?\s+(.+?)(?=\s+(?:какая|какой|какие|сколько|статистика|покажи|дай|есть|найди)\b|[?.!,]|$)/i);
         if (plain && plain[1]) value = plain[1];
+      }
+
+      if (!value && /статист|задан|информац|сведен/i.test(raw)) {
+        var byTail = raw.match(/\bпо\s+([a-zа-яё0-9_-]{4,})\s*[?.!]*$/i);
+        if (byTail && byTail[1] && !/^(данным|заданиям|статистике|объекту|проекту)$/i.test(byTail[1])) {
+          value = byTail[1];
+        }
       }
 
       value = value.replace(/^[\s«»„“”"']+|[\s«»„“”"'.]+$/g, "").trim();
@@ -998,7 +1019,7 @@
         "перегон":1,"станция":1,"ст":1,"от":1,"до":1,"объект":1,"объекта":1,
         "участок":1,"этап":1,"проект":1,"проектирование":1
       };
-      return hint.split(/\s+/).filter(function (x) {
+      return hint.split(/\s+/).map(tokenRoot).filter(function (x) {
         return x.length >= 4 && !weak[x];
       });
     }
@@ -1017,7 +1038,7 @@
         var strongHits = 0;
 
         strongTokens.forEach(function (token) {
-          if (normalized.indexOf(token) >= 0) strongHits++;
+          if (normalizedContainsToken(normalized, token)) strongHits++;
         });
 
         if (strongTokens.length && strongHits < strongTokens.length) {
@@ -1025,7 +1046,7 @@
         }
 
         tokens.forEach(function (token) {
-          if (normalized.indexOf(token) >= 0) score += token.length >= 6 ? 3 : 1;
+          if (normalizedContainsToken(normalized, token)) score += token.length >= 6 ? 3 : 1;
         });
 
         if (strongTokens.length && strongHits === strongTokens.length) score += 30;

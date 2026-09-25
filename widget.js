@@ -825,23 +825,74 @@
       }
     }
 
+    function getPendingState() {
+      try {
+        var raw = localStorage.getItem(pendingKey);
+        if (!raw) return null;
+        var pending = JSON.parse(raw);
+        if (!pending || !pending.startedAt) return null;
+        if (Date.now() - pending.startedAt > 180000) {
+          localStorage.removeItem(pendingKey);
+          return null;
+        }
+        return pending;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function storageStateSignature() {
+      try {
+        return (localStorage.getItem(historyKey) || "") + "|" + (localStorage.getItem(pendingKey) || "");
+      } catch (_) {
+        return String(Date.now());
+      }
+    }
+
     function saveHistory() {
       try {
         localStorage.setItem(historyKey, JSON.stringify(history.slice(-40)));
+        historySignature = storageStateSignature();
       } catch (_) {}
     }
 
-    function renderSavedHistory() {
+    function setPendingState(question) {
+      try {
+        localStorage.setItem(pendingKey, JSON.stringify({
+          question: question,
+          startedAt: Date.now()
+        }));
+        historySignature = storageStateSignature();
+      } catch (_) {}
+    }
+
+    function clearPendingState() {
+      try {
+        localStorage.removeItem(pendingKey);
+      } catch (_) {}
+    }
+
+    function renderHistoryState(showRestoredLabel) {
       history = loadSavedHistory();
+      messagesEl.innerHTML = "";
+
       history.forEach(function (m) {
         addMessage(m.role, m.content);
       });
-      if (history.length) {
+
+      var pending = getPendingState();
+      if (pending) {
+        addMessage("assistant", "Запрос выполняется… временно применяю фильтр и собираю данные с целевого листа.");
+      }
+
+      if (showRestoredLabel && history.length) {
         var divider = document.createElement("div");
         divider.textContent = "История восстановлена · " + Math.ceil(history.length / 2) + " диалогов";
         divider.style.cssText = "text-align:center;font-size:9px;color:#9ca3af;padding:2px 0";
         messagesEl.appendChild(divider);
       }
+
+      historySignature = storageStateSignature();
       scrollChatToBottom(true);
     }
 
@@ -849,8 +900,11 @@
       e.preventDefault();
       e.stopPropagation();
       history = [];
-      try { localStorage.removeItem(historyKey); } catch (_) {}
-      messagesEl.innerHTML = "";
+      try {
+        localStorage.removeItem(historyKey);
+        localStorage.removeItem(pendingKey);
+      } catch (_) {}
+      renderHistoryState(false);
       addMessage("assistant", "История запросов очищена.");
     };
 
@@ -858,7 +912,26 @@
       e.stopPropagation();
     }, true);
 
-    renderSavedHistory();
+    renderHistoryState(true);
+
+    window.__visiAiHistoryPollers = window.__visiAiHistoryPollers || {};
+    var pollerKey = String(w.general.renderTo || root.id || "visi-ai");
+    if (window.__visiAiHistoryPollers[pollerKey]) {
+      clearInterval(window.__visiAiHistoryPollers[pollerKey]);
+    }
+
+    window.__visiAiHistoryPollers[pollerKey] = setInterval(function () {
+      if (!document.body.contains(root)) {
+        clearInterval(window.__visiAiHistoryPollers[pollerKey]);
+        delete window.__visiAiHistoryPollers[pollerKey];
+        return;
+      }
+
+      var latestSignature = storageStateSignature();
+      if (latestSignature !== historySignature) {
+        renderHistoryState(false);
+      }
+    }, 500);
 
     function setBusy(busy) {
       sendEl.disabled = busy;

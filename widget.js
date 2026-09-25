@@ -757,6 +757,54 @@
       };
     }
 
+    function loadSavedHistory() {
+      try {
+        var raw = localStorage.getItem(historyKey);
+        if (!raw) return [];
+        var parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter(function (m) {
+          return m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string";
+        }).slice(-40);
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveHistory() {
+      try {
+        localStorage.setItem(historyKey, JSON.stringify(history.slice(-40)));
+      } catch (_) {}
+    }
+
+    function renderSavedHistory() {
+      history = loadSavedHistory();
+      history.forEach(function (m) {
+        addMessage(m.role, m.content);
+      });
+      if (history.length) {
+        var divider = document.createElement("div");
+        divider.textContent = "История восстановлена · " + Math.ceil(history.length / 2) + " диалогов";
+        divider.style.cssText = "text-align:center;font-size:9px;color:#9ca3af;padding:2px 0";
+        messagesEl.appendChild(divider);
+      }
+    }
+
+    clearHistoryEl.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      history = [];
+      try { localStorage.removeItem(historyKey); } catch (_) {}
+      messagesEl.innerHTML = "";
+      addMessage("assistant", "История запросов очищена.");
+    };
+
+    clearHistoryEl.addEventListener("pointerdown", function (e) {
+      e.stopPropagation();
+    }, true);
+
+    renderSavedHistory();
+
     function setBusy(busy) {
       sendEl.disabled = busy;
       inputEl.disabled = busy;

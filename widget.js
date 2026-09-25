@@ -664,6 +664,136 @@
       sendEl.textContent = busy ? "Думаю…" : "Отправить";
     }
 
+    function questionTokens(text) {
+      var stop = {
+        "какие":1,"какой":1,"какая":1,"какое":1,"есть":1,"про":1,"что":1,"где":1,
+        "покажи":1,"скажи":1,"данные":1,"виджет":1,"виджеты":1,"лист":1,"листе":1,
+        "дашборд":1,"дашборде":1,"мне":1,"его":1,"их":1,"по":1,"на":1,"в":1,"и":1
+      };
+      return String(text || "").toLowerCase()
+        .replace(/[^a-zа-яё0-9_-]+/gi, " ")
+        .split(/\s+/)
+        .filter(function (x) { return x.length >= 3 && !stop[x]; });
+    }
+
+    function collectDashboardContext(question) {
+      if (typeof visApi !== "function") {
+        return Promise.resolve(JSON.stringify({ error: "visApi() недоступен", ownWidgetData: dashboardData }));
+      }
+
+      var api = visApi();
+      var currentGetter = api.getWidgets || api.GetWidgets;
+      var currentPromise = typeof currentGetter === "function"
+        ? Promise.resolve(currentGetter.call(api)).catch(function () { return []; })
+        : Promise.resolve([]);
+
+      return Promise.all([loadFullDashboard(api), currentPromise]).then(function (parts) {
+        var dashboard = parts[0] && parts[0].data ? parts[0].data : {};
+        var currentRaw = parts[1];
+        var current = Array.isArray(currentRaw) ? currentRaw :
+          currentRaw && Array.isArray(currentRaw.items) ? currentRaw.items :
+          currentRaw && Array.isArray(currentRaw.widgets) ? currentRaw.widgets : [];
+
+        var currentGuids = {};
+        current.forEach(function (x) {
+          var g = getGuid(x);
+          if (g) currentGuids[g] = true;
+        });
+
+        var sheets = dashboard && Array.isArray(dashboard.sheets) ? dashboard.sheets : [];
+        var widgetIndex = [];
+        var sheetIndex = [];
+
+        sheets.forEach(function (sheet, si) {
+          var sheetName = smartText(sheet.name, 0) || getTitle(sheet) || ("Лист " + (si + 1));
+          var sheetGuid = getGuid(sheet);
+          var ws = sheet && Array.isArray(sheet.widgets) ? sheet.widgets : [];
+
+          sheetIndex.push({
+            name: sheetName,
+            guid: sheetGuid,
+            widgetCount: ws.length,
+            hidden: !!sheet.isHidden
+          });
+
+          ws.forEach(function (widget, wi) {
+            var guid = getGuid(widget);
+            widgetIndex.push({
+              guid: guid,
+              title: getTitle(widget),
+              type: getType(widget),
+              sheet: sheetName,
+              sheetGuid: sheetGuid,
+              current: !!currentGuids[guid],
+              index: wi
+            });
+          });
+        });
+
+        var tokens = questionTokens(question);
+        var q = String(question || "").toLowerCase();
+
+        var scored = widgetIndex.map(function (item) {
+          var hay = [item.title, item.type, item.sheet, item.guid].join(" ").toLowerCase();
+          var score = item.current ? 1 : 0;
+          tokens.forEach(function (token) {
+            if (hay.indexOf(token) >= 0) score += 5;
+            if (String(item.sheet).toLowerCase().indexOf(token) >= 0) score += 2;
+          });
+          if (item.guid && q.indexOf(item.guid.toLowerCase()) >= 0) score += 50;
+          if (!/imagewidget|textwidget|userwidget/i.test(item.type)) score += 1;
+          return { item: item, score: score };
+        });
+
+        scored.sort(function (a, b) { return b.score - a.score; });
+        var selected = scored
+          .filter(function (x) {
+            return x.item.guid && !/imagewidget|textwidget|userwidget/i.test(x.item.type);
+          })
+          .slice(0, 10)
+          .map(function (x) { return x.item; });
+
+        var dataGetter = api.getWidgetDataByGuid || api.GetWidgetDataByGuid;
+        var dataPromises = selected.map(function (info) {
+          if (typeof dataGetter !== "function") {
+            return Promise.resolve({ info: info, error: "getWidgetDataByGuid() недоступен" });
+          }
+
+          return Promise.resolve()
+            .then(function () { return dataGetter.call(api, info.guid); })
+            .then(function (data) {
+              return { info: info, data: safeSnapshot(data, 0, []) };
+            })
+            .catch(function (e) {
+              return { info: info, error: e && e.message ? e.message : String(e) };
+            });
+        });
+
+        return Promise.all(dataPromises).then(function (widgetData) {
+          var context = {
+            dashboard: {
+              guid: getGuid(dashboard),
+              name: smartText(dashboard.name, 0),
+              sheets: sheetIndex
+            },
+            allWidgets: widgetIndex,
+            selectedWidgetData: widgetData,
+            ownWidgetData: dashboardData,
+            note: "Карта всего дашборда передана полностью. Для вопроса дополнительно запрошены данные до 10 наиболее релевантных недекоративных виджетов."
+          };
+
+          var json = JSON.stringify(context);
+          if (json.length > 90000) json = json.slice(0, 90000) + "\n[TRUNCATED]";
+          return json;
+        });
+      }).catch(function (e) {
+        return JSON.stringify({
+          error: e && e.message ? e.message : String(e),
+          ownWidgetData: dashboardData
+        });
+      });
+    }
+
     function send() {
       var text = inputEl.value.trim();
       if (!text) return;

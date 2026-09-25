@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.3";
+    var version = "0.8.4";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -15,6 +15,7 @@
     }
     var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
     var pendingKey = "visi-ai-pending:" + dashboardGuidForHistory;
+    var sessionContextKey = "visi-ai-session-context:" + dashboardGuidForHistory;
     var history = [];
     var historySignature = "";
     var lastDiagnostic = null;
@@ -91,6 +92,12 @@
           '</div>' +
         '</div>' +
         '<div data-role="pending-banner" style="display:none;padding:7px 14px;border-bottom:1px solid #fde68a;background:#fffbeb;color:#92400e;font-size:10px;font-weight:700">● Запрос выполняется… применяю фильтры и собираю данные. Виджет может кратко перерисоваться.</div>' +
+        '<div data-role="session-context-bar" style="display:none;padding:6px 14px;border-bottom:1px solid #e5e7eb;background:#f8fafc;font-size:10px;color:#475569">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">' +
+            '<div><b>Контекст:</b> <span data-role="session-context-text"></span></div>' +
+            '<button data-role="session-context-clear" style="border:0;background:transparent;color:#64748b;font-size:10px;font-weight:700;cursor:pointer;padding:0">Сбросить</button>' +
+          '</div>' +
+        '</div>' +
         '<div style="padding:8px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
           '<div data-role="preview-toggle" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">' +
             '<div><div style="font-size:12px;font-weight:700">Данные для ответа</div><div style="font-size:9px;color:#9ca3af;margin-top:1px">Что именно VISI AI получил из Visiology для текущего вопроса</div></div>' +
@@ -124,6 +131,9 @@
     var previewToggleEl = root.querySelector('[data-role="preview-toggle"]');
     var previewArrowEl = root.querySelector('[data-role="preview-arrow"]');
     var pendingBannerEl = root.querySelector('[data-role="pending-banner"]');
+    var sessionContextBarEl = root.querySelector('[data-role="session-context-bar"]');
+    var sessionContextTextEl = root.querySelector('[data-role="session-context-text"]');
+    var sessionContextClearEl = root.querySelector('[data-role="session-context-clear"]');
     var scanEl = root.querySelector('[data-role="scan"]');
     var diagnosticsEl = root.querySelector('[data-role="diagnostics"]');
     var clearHistoryEl = root.querySelector('[data-role="history-clear"]');

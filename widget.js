@@ -7,7 +7,7 @@
     var localEndpoint = "http://127.0.0.1:11436";
     var localFallbackReady = false;
     var model = "qwen3-harness8k:14b";
-    var version = "0.9.0";
+    var version = "0.9.1";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -15,7 +15,7 @@
       dashboardGuidForHistory = location.pathname;
     }
     var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
-    var pendingKey = "visi-ai-pending-v2:" + dashboardGuidForHistory;
+    var pendingKey = "visi-ai-pending-v3:" + dashboardGuidForHistory;
     var sessionContextKey = "visi-ai-session-context-v2:" + dashboardGuidForHistory;
     var history = [];
     var historySignature = "";
@@ -988,11 +988,12 @@
       } catch (_) {}
     }
 
-    function setPendingState(question, phase) {
+    function setPendingState(question, phase, requestId) {
       try {
         localStorage.setItem(pendingKey, JSON.stringify({
           question: question,
           phase: phase || "Собираю данные…",
+          requestId: requestId || "",
           startedAt: Date.now()
         }));
         historySignature = storageStateSignature();
@@ -1015,6 +1016,65 @@
         localStorage.removeItem(pendingKey);
       } catch (_) {}
       updatePendingUi();
+    }
+
+    var pendingRecoveryInFlight = false;
+
+    function persistRecoveredAssistant(answer, requestId) {
+      history = loadSavedHistory();
+
+      var exists = history.some(function (m) {
+        return m && m.role === "assistant" && requestId && m.requestId === requestId;
+      });
+
+      if (!exists) {
+        history.push({
+          role: "assistant",
+          content: answer,
+          requestId: requestId || ""
+        });
+      }
+
+      saveHistory();
+      clearPendingState();
+      renderHistoryState(false);
+    }
+
+    function recoverPendingResult() {
+      var pending = getPendingState();
+      if (!pending || !pending.requestId || pendingRecoveryInFlight) return;
+
+      pendingRecoveryInFlight = true;
+
+      fetch(endpoint + "/chat-result?requestId=" + encodeURIComponent(pending.requestId), {
+        method: "GET",
+        cache: "no-store"
+      })
+      .then(function (r) {
+        if (r.status === 404) return null;
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data) return;
+
+        if (data.status === "done") {
+          var answer = data.message && data.message.content ? data.message.content : "Пустой ответ";
+          persistRecoveredAssistant(answer, pending.requestId);
+          return;
+        }
+
+        if (data.status === "error") {
+          persistRecoveredAssistant(
+            "**Ошибка:** " + (typeof data.error === "string" ? data.error : JSON.stringify(data.error || "Неизвестная ошибка")),
+            pending.requestId
+          );
+        }
+      })
+      .catch(function () {})
+      .finally(function () {
+        pendingRecoveryInFlight = false;
+      });
     }
 
     function renderHistoryState(showRestoredLabel) {
@@ -1061,6 +1121,7 @@
     }, true);
 
     renderHistoryState(true);
+    setTimeout(recoverPendingResult, 250);
 
     window.__visiAiHistoryPollers = window.__visiAiHistoryPollers || {};
     var pollerKey = String(w.general.renderTo || root.id || "visi-ai");
@@ -1081,7 +1142,9 @@
       } else {
         updatePendingUi();
       }
-    }, 350);
+
+      recoverPendingResult();
+    }, 500);
 
     function setBusy(busy) {
       if (busy) {
@@ -1967,10 +2030,13 @@
       }
 
       inputEl.value = "";
+      var requestId =
+        "visi-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 9);
+
       history = loadSavedHistory();
       addMessage("user", text);
-      history.push({ role: "user", content: text });
-      setPendingState(text, "Собираю данные и определяю нужный лист…");
+      history.push({ role: "user", content: text, requestId: requestId });
+      setPendingState(text, "Собираю данные и определяю нужный лист…", requestId);
       saveHistory();
       renderHistoryState(false);
       setBusy(true);
@@ -1981,10 +2047,18 @@
 
       function persistAssistant(answer) {
         history = loadSavedHistory();
-        var last = history.length ? history[history.length - 1] : null;
-        if (!last || last.role !== "assistant" || last.content !== answer) {
-          history.push({ role: "assistant", content: answer });
+        var alreadySaved = history.some(function (m) {
+          return m && m.role === "assistant" && m.requestId === requestId;
+        });
+
+        if (!alreadySaved) {
+          history.push({
+            role: "assistant",
+            content: answer,
+            requestId: requestId
+          });
         }
+
         saveHistory();
         clearPendingState();
       }
@@ -2063,6 +2137,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            requestId: requestId,
             model: model,
             messages: [
               {

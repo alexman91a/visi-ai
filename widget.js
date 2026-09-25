@@ -915,20 +915,32 @@
       console.error("[visi-ai] inspect failed", e);
     });
 
-    fetch(endpoint + "/health", { cache: "no-store" })
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
+    function checkHealth(url, label) {
+      return fetch(url + "/health", { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          if (!data || !data.ok) throw new Error("health=false");
+          endpoint = url;
+          statusEl.textContent = label + " · Ollama подключена";
+          statusEl.style.color = "#15803d";
+          return data;
+        });
+    }
+
+    checkHealth(endpoint, "Интернет")
+      .catch(function () {
+        return checkHealth(localEndpoint, "Локально");
       })
-      .then(function (data) {
-        statusEl.textContent = data.ok ? "Ollama подключена" : "Ollama недоступна";
-        statusEl.style.color = data.ok ? "#15803d" : "#b91c1c";
-        addMessage("assistant", "Связь с локальной Ollama установлена.");
+      .then(function () {
+        addMessage("assistant", "Связь с Ollama установлена. Можно спрашивать о других листах, виджетах и их данных.");
       })
       .catch(function (e) {
         statusEl.textContent = "Нет связи";
         statusEl.style.color = "#b91c1c";
-        addMessage("assistant", "Не удалось подключиться к локальному мосту: " + e.message);
+        addMessage("assistant", "**Нет связи с Ollama:** " + e.message);
       });
   };
 })();

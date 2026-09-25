@@ -94,10 +94,10 @@
         '<div data-role="messages" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#fff"></div>' +
         '<div style="padding:10px;border-top:1px solid #eceff3;background:#fafbfc">' +
           '<div style="display:flex;gap:8px;align-items:flex-end">' +
-            '<textarea data-role="input" placeholder="Спроси о данных дашборда…" style="flex:1;resize:none;min-height:42px;max-height:120px;border:1px solid #cfd5df;border-radius:10px;padding:10px 12px;box-sizing:border-box;font:13px Arial;outline:none"></textarea>' +
+            '<textarea data-role="input" placeholder="Спроси о любом листе, виджете или его данных…" style="flex:1;resize:none;min-height:42px;max-height:120px;border:1px solid #cfd5df;border-radius:10px;padding:10px 12px;box-sizing:border-box;font:13px Arial;outline:none"></textarea>' +
             '<button data-role="send" style="height:42px;padding:0 16px;border:0;border-radius:10px;background:#111827;color:white;font-weight:700;cursor:pointer">Отправить</button>' +
           '</div>' +
-          '<div style="margin-top:6px;font-size:10px;color:#9ca3af">Локально через Ollama · контекст сохраняется только на этом ПК</div>' +
+          '<div style="margin-top:6px;font-size:10px;color:#9ca3af">Ollama на вашем ПК · через HTTPS-туннель с локальным резервом</div>' +
         '</div>' +
       '</div>';
 
@@ -169,6 +169,12 @@
         var b = document.createElement("div");
         b.textContent = pair[1] || "—";
         b.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600";
+        row.style.cursor = "pointer";
+        row.title = "Нажмите, чтобы скопировать строку";
+        row.onclick = function (e) {
+          e.stopPropagation();
+          copyValue((pair[0] || "—") + "\t" + (pair[1] || "—"));
+        };
         row.appendChild(a);
         row.appendChild(b);
         previewEl.appendChild(row);

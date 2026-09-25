@@ -216,6 +216,7 @@
     function looksLikeWidget(obj, path) {
       if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
       var p = String(path || "").toLowerCase();
+      if (p.indexOf("widgetsexcludedfromimpact") >= 0) return false;
       var type = getType(obj).toLowerCase();
       if (p.indexOf("widget") >= 0 && getGuid(obj)) return true;
       if (obj.widgetGuid || obj.widgetId || obj.widgetType) return true;

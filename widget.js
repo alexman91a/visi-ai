@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.0";
+    var version = "0.8.1";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -14,7 +14,9 @@
       dashboardGuidForHistory = location.pathname;
     }
     var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
+    var pendingKey = "visi-ai-pending:" + dashboardGuidForHistory;
     var history = [];
+    var historySignature = "";
     var lastDiagnostic = null;
 
     function safeSnapshot(value, depth, seen) {

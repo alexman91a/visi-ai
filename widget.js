@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.7.3";
+    var version = "0.7.4";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -913,8 +913,23 @@
 
     function extractEntityHint(question) {
       var raw = String(question || "");
-      var match = raw.match(/объект\s+(.+?)(?=\s+(?:какая|какой|какие|сколько|статистика|статистик|покажи|дай)\b|\?|$)/i);
-      var value = match && match[1] ? match[1] : "";
+      var value = "";
+
+      var guillemet = raw.match(/объект\s+«([\s\S]*?)»/i);
+      if (guillemet && guillemet[1]) {
+        value = guillemet[1];
+      }
+
+      if (!value) {
+        var quoted = raw.match(/объект\s+["“]([\s\S]*?)["”]/i);
+        if (quoted && quoted[1]) value = quoted[1];
+      }
+
+      if (!value) {
+        var plain = raw.match(/объект\s+(.+?)(?=\.\s|\?\s*$|$)/i);
+        if (plain && plain[1]) value = plain[1];
+      }
+
       value = value.replace(/^[\s«»„“”"']+|[\s«»„“”"'.]+$/g, "").trim();
       return value;
     }

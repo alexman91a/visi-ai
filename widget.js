@@ -545,10 +545,28 @@
       }
     }
 
-    scanEl.onclick = function (e) {
-      e.stopPropagation();
+    function triggerDashboardScan(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      if (scanEl.disabled) return;
       scanDashboard();
-    };
+    }
+
+    scanEl.style.pointerEvents = "auto";
+    scanEl.style.position = "relative";
+    scanEl.style.zIndex = "20";
+
+    scanEl.addEventListener("pointerdown", function (e) {
+      e.stopPropagation();
+    }, true);
+
+    scanEl.addEventListener("mousedown", function (e) {
+      e.stopPropagation();
+    }, true);
+
+    scanEl.addEventListener("click", triggerDashboardScan, true);
 
     function escapeChatHtml(value) {
       return String(value == null ? "" : value)
@@ -969,6 +987,12 @@
       })
       .then(function () {
         addMessage("assistant", "Связь с Ollama установлена. Можно спрашивать о других листах, виджетах и их данных.");
+
+        setTimeout(function () {
+          if (!scanEl.disabled) {
+            scanDashboard();
+          }
+        }, 700);
       })
       .catch(function (e) {
         statusEl.textContent = "Нет связи";

@@ -1084,6 +1084,7 @@
       inputEl.value = "";
       addMessage("user", text);
       history.push({ role: "user", content: text });
+      saveHistory();
       setBusy(true);
 
       var waitBubble = addMessage("assistant", "Собираю данные релевантных виджетов…");
@@ -1092,6 +1093,11 @@
       collectDashboardContext(text)
       .then(function (ctx) {
         contextJson = ctx;
+        try {
+          renderAnswerData(JSON.parse(ctx), text);
+        } catch (_) {
+          renderAnswerData(null, text);
+        }
         waitBubble.setText("Анализирую данные…");
 
         return fetch(endpoint + "/chat", {
@@ -1110,7 +1116,7 @@
                   "Ниже передана карта всего дашборда и данные релевантных виджетов для текущего вопроса.\n\n" +
                   contextJson
               }
-            ].concat(history)
+            ].concat(history.slice(-24))
           })
         });
       })
@@ -1122,6 +1128,7 @@
         var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
         waitBubble.setText(answer);
         history.push({ role: "assistant", content: answer });
+        saveHistory();
       })
       .catch(function (e) {
         if (endpoint !== localEndpoint) {
@@ -1139,7 +1146,7 @@
                     "Ты AI-аналитик внутри BI-системы Visiology. Используй Markdown. Не выдумывай отсутствующие значения.\n\n" +
                     contextJson
                 }
-              ].concat(history)
+              ].concat(history.slice(-24))
             })
           })
           .then(function (r) {
@@ -1150,6 +1157,7 @@
             var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
             waitBubble.setText(answer);
             history.push({ role: "assistant", content: answer });
+            saveHistory();
             statusEl.textContent = "Ollama подключена локально";
             statusEl.style.color = "#15803d";
           });

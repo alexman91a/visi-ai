@@ -964,6 +964,21 @@
             return (table.rows && table.rows.length) || table.totalRows !== null;
           });
 
+          var compactTables = useful.slice(0, 6).map(function (table) {
+            return {
+              name: table.name,
+              id: table.id,
+              score: table.score,
+              totalRows: table.totalRows,
+              filteredRows: table.filteredRows,
+              matchedBy: table.matchedBy,
+              columns: (table.columns || []).slice(0, 40),
+              measures: (table.measures || []).slice(0, 20),
+              rows: (table.rows || []).slice(0, 40),
+              error: table.error || ""
+            };
+          });
+
           var context = {
             mode: "data-model",
             directTableAccess: true,
@@ -973,10 +988,10 @@
             },
             tableCount: dataContext.tableCount,
             entityTerm: dataContext.entityTerm,
-            selectedTables: useful.slice(0, 6),
+            selectedTables: compactTables,
             searchedWidgetCount: dataContext.tableCount || 0,
             matchedWidgetCount: useful.length,
-            selectedWidgetData: useful.slice(0, 6).map(function (table) {
+            selectedWidgetData: compactTables.map(function (table) {
               return {
                 info: {
                   title: table.name,
@@ -984,7 +999,7 @@
                   sheet: "Модель данных"
                 },
                 relevance: table.score || 0,
-                rows: (table.rows || []).slice(0, 80),
+                rows: (table.rows || []).slice(0, 25),
                 columnSummary: {},
                 data: { matches: [] },
                 error: table.error || ""
@@ -994,6 +1009,19 @@
               "Это прямой доступ к таблицам модели данных Visiology через Formula Engine. " +
               "selectedTables содержит реальные строки таблиц, их поля, общее количество строк и при наличии matchedBy — фильтрацию по сущности из вопроса."
           };
+
+          var contextSize = JSON.stringify(context).length;
+          if (contextSize > 70000) {
+            context.selectedTables = context.selectedTables.slice(0, 4).map(function (table) {
+              table.rows = (table.rows || []).slice(0, 18);
+              table.columns = (table.columns || []).slice(0, 25);
+              return table;
+            });
+            context.selectedWidgetData = context.selectedWidgetData.slice(0, 4).map(function (source) {
+              source.rows = (source.rows || []).slice(0, 18);
+              return source;
+            });
+          }
 
           postDiagnostic({
             kind: "data-model-context",

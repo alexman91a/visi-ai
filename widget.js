@@ -231,6 +231,15 @@
         return;
       }
 
+      if (context.mode === "chat") {
+        previewCountEl.textContent = "без сканирования дашборда";
+        var chatInfo = document.createElement("div");
+        chatInfo.textContent = "Для этого вопроса данные Visiology не требуются.";
+        chatInfo.style.cssText = "padding:11px;font-size:10px;line-height:1.4;color:#6b7280";
+        previewEl.appendChild(chatInfo);
+        return;
+      }
+
       var sources = Array.isArray(context.selectedWidgetData) ? context.selectedWidgetData : [];
       var searched = context.searchedWidgetCount || 0;
       var matched = context.matchedWidgetCount || 0;
@@ -1952,6 +1961,14 @@
       }
 
       function makeSystemPrompt() {
+        if (contextObject && contextObject.mode === "chat") {
+          return (
+            "Ты помощник внутри VISI AI. Ответь пользователю по-русски естественно и кратко. " +
+            "Этот вопрос не требует данных дашборда, поэтому не придумывай BI-контекст и не говори, что данных нет. " +
+            "Если пользователь просто здоровается или проверяет, работает ли помощник — ответь прямо."
+          );
+        }
+
         return (
           "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
           "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
@@ -2031,7 +2048,22 @@
         });
       }
 
-      collectDashboardContext(analysisRequest.text)
+      var dashboardQuestion = isLikelyDashboardQuestion(text, analysisRequest);
+      var contextPromise = dashboardQuestion
+        ? withTimeout(collectDashboardContext(analysisRequest.text), 22000, "Сбор контекста Visiology")
+        : Promise.resolve(JSON.stringify({
+            mode: "chat",
+            searchedWidgetCount: 0,
+            matchedWidgetCount: 0,
+            selectedWidgetData: [],
+            note: "Вопрос не требует обращения к данным дашборда."
+          }));
+
+      if (!dashboardQuestion) {
+        updatePendingPhase("Отвечаю…");
+      }
+
+      contextPromise
       .then(function (ctx) {
         contextJson = ctx;
         try {

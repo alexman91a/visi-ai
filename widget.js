@@ -1561,15 +1561,65 @@
       var text = inputEl.value.trim();
       if (!text) return;
 
+      var existingPending = getPendingState();
+      if (existingPending) {
+        addMessage("assistant", "Предыдущий запрос ещё выполняется. Дождитесь завершения — ответ появится автоматически.");
+        return;
+      }
+
       inputEl.value = "";
+      history = loadSavedHistory();
       addMessage("user", text);
       history.push({ role: "user", content: text });
+      setPendingState(text);
       saveHistory();
       setBusy(true);
 
       var waitBubble = addMessage("assistant", "Собираю данные релевантных виджетов…");
       var contextJson = "{}";
       var contextObject = null;
+
+      function persistAssistant(answer) {
+        history = loadSavedHistory();
+        var last = history.length ? history[history.length - 1] : null;
+        if (!last || last.role !== "assistant" || last.content !== answer) {
+          history.push({ role: "assistant", content: answer });
+        }
+        saveHistory();
+        clearPendingState();
+      }
+
+      function makeSystemPrompt() {
+        return (
+          "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
+          "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
+          "Не выдумывай отсутствующие значения. " +
+          "Если в контексте есть derivedMetrics, считай их приоритетным и уже вычисленным представлением карточек дашборда после фильтрации по сущности. " +
+          "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn: sourceColumn может содержать устаревшее или технически перепутанное имя. " +
+          "Если derivedMetrics содержит запрошенные показатели, дай прямой ответ по ним и не утверждай, что статистика отсутствует. " +
+          "Ниже передан компактный контекст текущего вопроса.\n\n" + contextJson
+        );
+      }
+
+      function requestChat(targetEndpoint) {
+        var latestHistory = loadSavedHistory();
+        return fetch(targetEndpoint + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              {
+                role: "system",
+                content: makeSystemPrompt()
+              }
+            ].concat(latestHistory.slice(-24))
+          })
+        }).then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        });
+      }
 
       collectDashboardContext(text)
       .then(function (ctx) {
@@ -1589,47 +1639,23 @@
         } catch (_) {
           contextObject = null;
           renderAnswerData(null, text);
-          lastDiagnostic = {
-            kind: "question-context",
-            version: version,
-            capturedAt: new Date().toISOString(),
-            question: text,
-            endpoint: endpoint,
-            dashboardGuid: dashboardGuidForHistory,
-            contextRaw: ctx
-          };
         }
-        waitBubble.setText("Анализирую данные…");
 
-        return fetch(endpoint + "/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              {
-                role: "system",
-                content:
-                  "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
-                  "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
-                  "Не выдумывай отсутствующие значения. Если данных конкретного виджета получить не удалось, прямо укажи это. " +
-                  "Если вывод основан на конкретном виджете, называй его лист и название или тип. " +
-                  "Ниже передана карта всего дашборда и данные релевантных виджетов для текущего вопроса.\n\n" +
-                  contextJson
-              }
-            ].concat(history.slice(-24))
-          })
-        });
+        waitBubble.setText("Анализирую данные…");
+        return requestChat(endpoint);
       })
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
+      .catch(function (e) {
+        if (endpoint === localEndpoint) throw e;
+        endpoint = localEndpoint;
+        try {
+          statusEl.textContent = "Интернет недоступен · пробую локально";
+        } catch (_) {}
+        return requestChat(localEndpoint);
       })
       .then(function (data) {
         var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
-        waitBubble.setText(answer);
-        history.push({ role: "assistant", content: answer });
-        saveHistory();
+        try { waitBubble.setText(answer); } catch (_) {}
+        persistAssistant(answer);
 
         lastDiagnostic = {
           kind: "question-result",
@@ -1644,54 +1670,10 @@
         postDiagnostic(lastDiagnostic);
       })
       .catch(function (e) {
-        if (endpoint !== localEndpoint) {
-          endpoint = localEndpoint;
-          statusEl.textContent = "Интернет недоступен · пробую локально";
-          return fetch(endpoint + "/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: model,
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "Ты AI-аналитик внутри BI-системы Visiology. Используй Markdown. Не выдумывай отсутствующие значения.\n\n" +
-                    contextJson
-                }
-              ].concat(history.slice(-24))
-            })
-          })
-          .then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.json();
-          })
-          .then(function (data) {
-            var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
-            waitBubble.setText(answer);
-            history.push({ role: "assistant", content: answer });
-            saveHistory();
+        var errorText = "**Ошибка:** " + (e && e.message ? e.message : String(e));
+        try { waitBubble.setText(errorText); } catch (_) {}
+        persistAssistant(errorText);
 
-            lastDiagnostic = {
-              kind: "question-result",
-              version: version,
-              capturedAt: new Date().toISOString(),
-              question: text,
-              endpoint: endpoint,
-              dashboardGuid: dashboardGuidForHistory,
-              answer: answer,
-              context: contextObject
-            };
-            postDiagnostic(lastDiagnostic);
-
-            statusEl.textContent = "Ollama подключена локально";
-            statusEl.style.color = "#15803d";
-          });
-        }
-        throw e;
-      })
-      .catch(function (e) {
-        waitBubble.setText("**Ошибка связи с Ollama:** " + e.message);
         lastDiagnostic = {
           kind: "question-result",
           version: version,
@@ -1705,8 +1687,10 @@
         postDiagnostic(lastDiagnostic);
       })
       .finally(function () {
-        setBusy(false);
-        inputEl.focus();
+        try {
+          setBusy(false);
+          inputEl.focus();
+        } catch (_) {}
       });
     }
 

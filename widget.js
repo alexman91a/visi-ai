@@ -858,8 +858,30 @@
       return out;
     }
 
+    function extractEntityHint(question) {
+      var raw = String(question || "");
+      var match = raw.match(/объект\s+(.+?)(?=\s+(?:какая|какой|какие|сколько|статистика|статистик|покажи|дай)\b|\?|$)/i);
+      var value = match && match[1] ? match[1] : "";
+      value = value.replace(/^[\s«»„“”"']+|[\s«»„“”"'.]+$/g, "").trim();
+      return value;
+    }
+
+    function strongEntityTokens(question) {
+      var hint = normalizeSearchText(extractEntityHint(question));
+      if (!hint) return [];
+      var weak = {
+        "перегон":1,"станция":1,"ст":1,"от":1,"до":1,"объект":1,"объекта":1,
+        "участок":1,"этап":1,"проект":1,"проектирование":1
+      };
+      return hint.split(/\s+/).filter(function (x) {
+        return x.length >= 4 && !weak[x];
+      });
+    }
+
     function targetedDataSnapshot(data, question) {
       var tokens = questionTokens(question);
+      var entityHint = extractEntityHint(question);
+      var strongTokens = strongEntityTokens(question);
       var matches = [];
       var visited = 0;
       var seen = [];
@@ -867,30 +889,48 @@
       function scoreText(text) {
         var normalized = normalizeSearchText(text);
         var score = 0;
+        var strongHits = 0;
+
+        strongTokens.forEach(function (token) {
+          if (normalized.indexOf(token) >= 0) strongHits++;
+        });
+
+        if (strongTokens.length && strongHits < strongTokens.length) {
+          return { score: 0, strongHits: strongHits, exactEntity: false };
+        }
+
         tokens.forEach(function (token) {
           if (normalized.indexOf(token) >= 0) score += token.length >= 6 ? 3 : 1;
         });
-        return score;
+
+        if (strongTokens.length && strongHits === strongTokens.length) score += 30;
+        var normalizedHint = normalizeSearchText(entityHint);
+        var exactEntity = !!normalizedHint && normalized.indexOf(normalizedHint) >= 0;
+        if (exactEntity) score += 50;
+
+        return { score: score, strongHits: strongHits, exactEntity: exactEntity };
       }
 
       function walk(node, path, depth) {
-        if (visited > 5000 || depth > 8 || node === null || node === undefined) return;
+        if (visited > 10000 || depth > 9 || node === null || node === undefined) return;
         if (typeof node !== "object") return;
         if (seen.indexOf(node) !== -1) return;
         seen.push(node);
         visited++;
 
         if (Array.isArray(node)) {
-          for (var i = 0; i < node.length && i < 800; i++) {
+          for (var i = 0; i < node.length && i < 1500; i++) {
             var item = node[i];
             if (item && typeof item === "object") {
               var text = compactPrimitiveText(item, 0);
-              var score = scoreText(text);
-              if (score > 0) {
+              var scored = scoreText(text);
+              if (scored.score > 0) {
                 matches.push({
-                  score: score,
+                  score: scored.score,
+                  strongHits: scored.strongHits,
+                  exactEntity: scored.exactEntity,
                   path: path + "[" + i + "]",
-                  text: String(text).trim().slice(0, 2500),
+                  text: String(text).trim().slice(0, 3500),
                   value: safeSnapshot(item, 0, [])
                 });
               }
@@ -901,7 +941,7 @@
         }
 
         var keys = Object.keys(node);
-        for (var k = 0; k < keys.length && k < 120; k++) {
+        for (var k = 0; k < keys.length && k < 160; k++) {
           var key = keys[k];
           try { walk(node[key], path ? path + "." + key : key, depth + 1); } catch (_) {}
         }
@@ -911,9 +951,11 @@
       matches.sort(function (a, b) { return b.score - a.score; });
 
       return {
+        entityHint: entityHint,
+        strongEntityTokens: strongTokens,
         queryTokens: tokens,
         matchCount: matches.length,
-        matches: matches.slice(0, 30),
+        matches: matches.slice(0, 40),
         overview: safeSnapshot(data, 0, [])
       };
     }

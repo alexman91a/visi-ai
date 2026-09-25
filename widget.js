@@ -449,7 +449,12 @@
 
         var guid = document.createElement("div");
         guid.textContent = info.guid ? "GUID: " + info.guid : "GUID не определён";
-        guid.style.cssText = "margin-top:3px;color:#6b7280;font-family:Consolas,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        guid.style.cssText = "margin-top:3px;color:#6b7280;font-family:Consolas,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer";
+        guid.title = info.guid ? "Нажмите, чтобы скопировать GUID" : "";
+        guid.onclick = function (e) {
+          e.stopPropagation();
+          if (info.guid) copyValue(info.guid);
+        };
 
         var path = document.createElement("div");
         path.textContent = info.path || "";

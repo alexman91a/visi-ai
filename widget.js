@@ -715,16 +715,110 @@
       sendEl.textContent = busy ? "Думаю…" : "Отправить";
     }
 
+    function normalizeSearchText(text) {
+      return String(text == null ? "" : text)
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .replace(/[«»„“”"]/g, " ")
+        .replace(/[^a-zа-я0-9_-]+/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
     function questionTokens(text) {
       var stop = {
         "какие":1,"какой":1,"какая":1,"какое":1,"есть":1,"про":1,"что":1,"где":1,
         "покажи":1,"скажи":1,"данные":1,"виджет":1,"виджеты":1,"лист":1,"листе":1,
-        "дашборд":1,"дашборде":1,"мне":1,"его":1,"их":1,"по":1,"на":1,"в":1,"и":1
+        "дашборд":1,"дашборде":1,"мне":1,"его":1,"их":1,"по":1,"на":1,"в":1,"и":1,
+        "статистика":1,"статистике":1,"задания":1,"заданиям":1,"заданий":1,
+        "объект":1,"объекта":1,"объекте":1,"информация":1,"информацию":1,
+        "сколько":1,"всего":1,"для":1,"или":1,"это":1,"этот":1,"эта":1,"этом":1
       };
-      return String(text || "").toLowerCase()
-        .replace(/[^a-zа-яё0-9_-]+/gi, " ")
+      return normalizeSearchText(text)
         .split(/\s+/)
         .filter(function (x) { return x.length >= 3 && !stop[x]; });
+    }
+
+    function compactPrimitiveText(value, depth) {
+      depth = depth || 0;
+      if (depth > 4 || value === null || value === undefined) return "";
+      var t = typeof value;
+      if (t === "string" || t === "number" || t === "boolean") return " " + String(value);
+      if (Array.isArray(value)) {
+        var arr = "";
+        for (var i = 0; i < value.length && i < 30; i++) {
+          arr += compactPrimitiveText(value[i], depth + 1);
+        }
+        return arr;
+      }
+      if (t !== "object") return "";
+      var out = "";
+      var keys = Object.keys(value);
+      for (var k = 0; k < keys.length && k < 80; k++) {
+        if (keys[k] === "metadata") continue;
+        try { out += compactPrimitiveText(value[keys[k]], depth + 1); } catch (_) {}
+      }
+      return out;
+    }
+
+    function targetedDataSnapshot(data, question) {
+      var tokens = questionTokens(question);
+      var matches = [];
+      var visited = 0;
+      var seen = [];
+
+      function scoreText(text) {
+        var normalized = normalizeSearchText(text);
+        var score = 0;
+        tokens.forEach(function (token) {
+          if (normalized.indexOf(token) >= 0) score += token.length >= 6 ? 3 : 1;
+        });
+        return score;
+      }
+
+      function walk(node, path, depth) {
+        if (visited > 5000 || depth > 8 || node === null || node === undefined) return;
+        if (typeof node !== "object") return;
+        if (seen.indexOf(node) !== -1) return;
+        seen.push(node);
+        visited++;
+
+        if (Array.isArray(node)) {
+          for (var i = 0; i < node.length && i < 800; i++) {
+            var item = node[i];
+            if (item && typeof item === "object") {
+              var text = compactPrimitiveText(item, 0);
+              var score = scoreText(text);
+              if (score > 0) {
+                matches.push({
+                  score: score,
+                  path: path + "[" + i + "]",
+                  text: String(text).trim().slice(0, 2500),
+                  value: safeSnapshot(item, 0, [])
+                });
+              }
+            }
+            walk(item, path + "[" + i + "]", depth + 1);
+          }
+          return;
+        }
+
+        var keys = Object.keys(node);
+        for (var k = 0; k < keys.length && k < 120; k++) {
+          var key = keys[k];
+          try { walk(node[key], path ? path + "." + key : key, depth + 1); } catch (_) {}
+        }
+      }
+
+      walk(data, "data", 0);
+      matches.sort(function (a, b) { return b.score - a.score; });
+
+      return {
+        queryTokens: tokens,
+        matchCount: matches.length,
+        matches: matches.slice(0, 30),
+        overview: safeSnapshot(data, 0, [])
+      };
     }
 
     function collectDashboardContext(question) {
@@ -781,66 +875,107 @@
           });
         });
 
+        var q = normalizeSearchText(question);
         var tokens = questionTokens(question);
-        var q = String(question || "").toLowerCase();
 
-        var scored = widgetIndex.map(function (item) {
-          var hay = [item.title, item.type, item.sheet, item.guid].join(" ").toLowerCase();
+        var explicitSheets = sheetIndex.filter(function (sheet) {
+          var sn = normalizeSearchText(sheet.name);
+          return sn && (q.indexOf(sn) >= 0 || tokens.some(function (t) { return sn.indexOf(t) >= 0; }));
+        });
+
+        var nonDecorative = widgetIndex.filter(function (item) {
+          return item.guid && !/imagewidget|textwidget|userwidget/i.test(item.type);
+        });
+
+        var pool;
+        if (explicitSheets.length) {
+          var sheetGuids = {};
+          explicitSheets.forEach(function (s) { sheetGuids[s.guid] = true; });
+          pool = nonDecorative.filter(function (item) { return !!sheetGuids[item.sheetGuid]; });
+        } else {
+          var currentPool = nonDecorative.filter(function (item) { return item.current; });
+          pool = currentPool.length ? currentPool : nonDecorative;
+        }
+
+        var scored = pool.map(function (item) {
+          var hay = normalizeSearchText([item.title, item.type, item.sheet, item.guid].join(" "));
           var score = item.current ? 1 : 0;
           tokens.forEach(function (token) {
             if (hay.indexOf(token) >= 0) score += 5;
-            if (String(item.sheet).toLowerCase().indexOf(token) >= 0) score += 2;
           });
           if (item.guid && q.indexOf(item.guid.toLowerCase()) >= 0) score += 50;
-          if (!/imagewidget|textwidget|userwidget/i.test(item.type)) score += 1;
           return { item: item, score: score };
         });
 
         scored.sort(function (a, b) { return b.score - a.score; });
-        var selected = scored
-          .filter(function (x) {
-            return x.item.guid && !/imagewidget|textwidget|userwidget/i.test(x.item.type);
-          })
-          .slice(0, 10)
-          .map(function (x) { return x.item; });
+
+        var broadSearch = tokens.length > 0;
+        var selected = broadSearch
+          ? scored.slice(0, explicitSheets.length ? Math.min(scored.length, 40) : 18).map(function (x) { return x.item; })
+          : scored.slice(0, 12).map(function (x) { return x.item; });
 
         var dataGetter = api.getWidgetDataByGuid || api.GetWidgetDataByGuid;
         var dataPromises = selected.map(function (info) {
           if (typeof dataGetter !== "function") {
-            return Promise.resolve({ info: info, error: "getWidgetDataByGuid() недоступен" });
+            return Promise.resolve({ info: info, error: "getWidgetDataByGuid() недоступен", relevance: 0 });
           }
 
           return Promise.resolve()
             .then(function () { return dataGetter.call(api, info.guid); })
             .then(function (data) {
-              return { info: info, data: safeSnapshot(data, 0, []) };
+              var targeted = targetedDataSnapshot(data, question);
+              return {
+                info: info,
+                relevance: targeted.matchCount ? targeted.matches[0].score : 0,
+                data: targeted
+              };
             })
             .catch(function (e) {
-              return { info: info, error: e && e.message ? e.message : String(e) };
+              return {
+                info: info,
+                relevance: 0,
+                error: e && e.message ? e.message : String(e)
+              };
             });
         });
 
-        return Promise.all(dataPromises).then(function (widgetData) {
+        return Promise.all(dataPromises).then(function (allWidgetData) {
+          allWidgetData.sort(function (a, b) { return (b.relevance || 0) - (a.relevance || 0); });
+
+          var matched = allWidgetData.filter(function (x) { return (x.relevance || 0) > 0; });
+          var dataToSend = matched.length
+            ? matched.slice(0, 12)
+            : allWidgetData.slice(0, 10);
+
+          var ownTargeted = targetedDataSnapshot(w && w.data ? w.data.primaryData : null, question);
+
           var context = {
             dashboard: {
               guid: getGuid(dashboard),
               name: smartText(dashboard.name, 0),
               sheets: sheetIndex
             },
+            requestedSheet: explicitSheets.map(function (x) { return x.name; }),
+            queryTokens: tokens,
             allWidgets: widgetIndex,
-            selectedWidgetData: widgetData,
-            ownWidgetData: dashboardData,
-            note: "Карта всего дашборда передана полностью. Для вопроса дополнительно запрошены данные до 10 наиболее релевантных недекоративных виджетов."
+            searchedWidgetCount: selected.length,
+            matchedWidgetCount: matched.length,
+            selectedWidgetData: dataToSend,
+            ownWidgetData: ownTargeted,
+            note:
+              "Поиск выполняется не только по названиям виджетов, но и внутри их данных. " +
+              "Если в вопросе указано название листа, сканируются данные виджетов именно этого листа. " +
+              "В matches находятся строки и узлы данных, содержащие слова из запроса."
           };
 
           var json = JSON.stringify(context);
-          if (json.length > 90000) json = json.slice(0, 90000) + "\n[TRUNCATED]";
+          if (json.length > 140000) json = json.slice(0, 140000) + "\n[TRUNCATED]";
           return json;
         });
       }).catch(function (e) {
         return JSON.stringify({
           error: e && e.message ? e.message : String(e),
-          ownWidgetData: dashboardData
+          ownWidgetData: targetedDataSnapshot(w && w.data ? w.data.primaryData : null, question)
         });
       });
     }

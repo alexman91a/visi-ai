@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.1";
+    var version = "0.8.2";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -90,19 +90,18 @@
             '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
           '</div>' +
         '</div>' +
-        '<div style="padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
+        '<div data-role="pending-banner" style="display:none;padding:7px 14px;border-bottom:1px solid #fde68a;background:#fffbeb;color:#92400e;font-size:10px;font-weight:700">● Запрос выполняется… применяю фильтры и собираю данные. Виджет может кратко перерисоваться.</div>' +
+        '<div style="padding:8px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
+          '<div data-role="preview-toggle" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">' +
             '<div><div style="font-size:12px;font-weight:700">Данные для ответа</div><div style="font-size:9px;color:#9ca3af;margin-top:1px">Что именно VISI AI получил из Visiology для текущего вопроса</div></div>' +
-            '<div data-role="preview-count" style="font-size:10px;color:#9ca3af"></div>' +
+            '<div style="display:flex;align-items:center;gap:8px"><div data-role="preview-count" style="font-size:10px;color:#9ca3af"></div><div data-role="preview-arrow" style="font-size:11px;color:#6b7280">▾</div></div>' +
           '</div>' +
-          '<div data-role="preview" style="max-height:145px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
+          '<div data-role="preview-wrap" style="display:none;margin-top:7px">' +
+            '<div data-role="preview" style="max-height:145px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
+          '</div>' +
         '</div>' +
-        '<div data-role="scan-panel" style="display:none;padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
-            '<div style="font-size:12px;font-weight:700">Структура дашборда</div>' +
-            '<div data-role="scan-count" style="font-size:10px;color:#9ca3af"></div>' +
-          '</div>' +
-          '<div data-role="scan-results" style="max-height:170px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
+        '<div data-role="scan-panel" style="padding:6px 14px;border-bottom:1px solid #eceff3;background:#fafbfc">' +
+          '<div data-role="scan-count" style="font-size:10px;color:#6b7280">Структура дашборда: ещё не просканирована</div>' +
         '</div>' +
         '<div data-role="messages" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#fff"></div>' +
         '<div style="padding:10px;border-top:1px solid #eceff3;background:#fafbfc">' +
@@ -121,12 +120,15 @@
     var contextEl = root.querySelector('[data-role="context"]');
     var previewEl = root.querySelector('[data-role="preview"]');
     var previewCountEl = root.querySelector('[data-role="preview-count"]');
+    var previewWrapEl = root.querySelector('[data-role="preview-wrap"]');
+    var previewToggleEl = root.querySelector('[data-role="preview-toggle"]');
+    var previewArrowEl = root.querySelector('[data-role="preview-arrow"]');
+    var pendingBannerEl = root.querySelector('[data-role="pending-banner"]');
     var scanEl = root.querySelector('[data-role="scan"]');
     var diagnosticsEl = root.querySelector('[data-role="diagnostics"]');
     var clearHistoryEl = root.querySelector('[data-role="history-clear"]');
     var scanPanelEl = root.querySelector('[data-role="scan-panel"]');
     var scanCountEl = root.querySelector('[data-role="scan-count"]');
-    var scanResultsEl = root.querySelector('[data-role="scan-results"]');
 
     var autoFollowChat = true;
     var autoScrollThreshold = 64;

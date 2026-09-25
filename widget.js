@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.4";
+    var version = "0.8.5";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -1823,6 +1823,7 @@
 
       var contextJson = "{}";
       var contextObject = null;
+      var analysisRequest = buildAnalysisQuestion(text);
 
       function persistAssistant(answer) {
         history = loadSavedHistory();
@@ -1843,6 +1844,7 @@
           "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn. " +
           "Если filterAction.applied=true, сущность была найдена и фильтр реально применён; не утверждай, что объект отсутствует. " +
           "При широком аналитическом вопросе ищи конкретные отклонения только в фактически переданных rows/columnSummary и отделяй факт от предположения. " +
+          "Если это продолжение предыдущего запроса, сохраняй объект и лист из filterAction/context и трактуй слова «все», «их», «эти», «просроченные» как относящиеся к текущей сущности, а не ко всему дашборду. " +
           "Ниже передан компактный контекст текущего вопроса.\n\n" + contextJson
         );
       }
@@ -1850,6 +1852,7 @@
       function buildDirectMetricAnswer(ctx) {
         if (!ctx || !Array.isArray(ctx.derivedMetrics) || !ctx.derivedMetrics.length) return "";
         if (!/статист|задан|сколько|всего|выполн|просроч|в работе|не начат|истекает срок/i.test(text)) return "";
+        if (/покажи|выведи|перечисли|список|детал|все\s+просроч|все\s+выполн/i.test(text)) return "";
 
         var order = ["Всего", "Выполнено", "В работе", "Просрочено", "Не начато", "Истекает срок"];
         var map = {};
@@ -1911,12 +1914,13 @@
         });
       }
 
-      collectDashboardContext(text)
+      collectDashboardContext(analysisRequest.text)
       .then(function (ctx) {
         contextJson = ctx;
         try {
           contextObject = JSON.parse(ctx);
           renderAnswerData(contextObject, text);
+          saveSessionContextFromAnswer(contextObject, text);
           lastDiagnostic = {
             kind: "question-context",
             version: version,
@@ -1924,6 +1928,8 @@
             question: text,
             endpoint: endpoint,
             dashboardGuid: dashboardGuidForHistory,
+            inheritedConversationContext: analysisRequest.inherited ? analysisRequest.context : null,
+            analysisQuestion: analysisRequest.text,
             context: contextObject
           };
         } catch (_) {
@@ -1959,6 +1965,8 @@
           question: text,
           endpoint: endpoint,
           dashboardGuid: dashboardGuidForHistory,
+          inheritedConversationContext: analysisRequest.inherited ? analysisRequest.context : null,
+          analysisQuestion: analysisRequest.text,
           answer: answer,
           context: contextObject
         };
@@ -1975,6 +1983,8 @@
           question: text,
           endpoint: endpoint,
           dashboardGuid: dashboardGuidForHistory,
+          inheritedConversationContext: analysisRequest.inherited ? analysisRequest.context : null,
+          analysisQuestion: analysisRequest.text,
           error: e && e.message ? e.message : String(e),
           context: contextObject
         };

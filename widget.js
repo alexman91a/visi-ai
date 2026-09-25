@@ -7,7 +7,7 @@
     var localEndpoint = "http://127.0.0.1:11436";
     var localFallbackReady = false;
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.9";
+    var version = "0.9.0";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -1807,11 +1807,11 @@
 
               var dataToSend;
               if (explicitSheets.length || filterAction.applied) {
-                dataToSend = allWidgetData.slice(0, 30);
+                dataToSend = allWidgetData.slice(0, 14);
               } else if (broadAnalysis) {
-                dataToSend = allWidgetData.slice(0, 22);
+                dataToSend = allWidgetData.slice(0, 14);
               } else {
-                dataToSend = matched.length ? matched.slice(0, 18) : allWidgetData.slice(0, 14);
+                dataToSend = matched.length ? matched.slice(0, 10) : allWidgetData.slice(0, 8);
               }
 
               function deriveMetric(item) {
@@ -1859,16 +1859,28 @@
                 return metricMap[label];
               }).filter(Boolean);
 
-              var compactSources = dataToSend.map(function (item) {
+              function compactSummary(summary, maxValues) {
+                var out = {};
+                Object.keys(summary || {}).slice(0, 20).forEach(function (key) {
+                  out[key] = Array.isArray(summary[key]) ? summary[key].slice(0, maxValues || 10) : summary[key];
+                });
+                return out;
+              }
+
+              function compactSource(item, rowLimit) {
                 return {
                   info: item.info,
                   selectedValues: item.selectedValues,
                   error: item.error,
                   relevance: item.relevance,
-                  rows: Array.isArray(item.rows) ? item.rows.slice(0, 100) : [],
-                  columnSummary: item.columnSummary || {},
-                  matches: item.data && Array.isArray(item.data.matches) ? item.data.matches.slice(0, 8) : []
+                  rows: Array.isArray(item.rows) ? item.rows.slice(0, rowLimit || 30) : [],
+                  columnSummary: compactSummary(item.columnSummary || {}, 10),
+                  matches: item.data && Array.isArray(item.data.matches) ? item.data.matches.slice(0, 3) : []
                 };
+              }
+
+              var compactSources = dataToSend.map(function (item) {
+                return compactSource(item, 30);
               });
 
               var context = {
@@ -1916,7 +1928,23 @@
                   "Не переименовывай метрики по sourceColumn, если label уже задан."
               };
 
-              return JSON.stringify(aiContext);
+              var aiJson = JSON.stringify(aiContext);
+
+              if (aiJson.length > 70000) {
+                aiContext.selectedWidgetData = dataToSend.slice(0, 8).map(function (item) {
+                  return compactSource(item, 15);
+                });
+                aiJson = JSON.stringify(aiContext);
+              }
+
+              if (aiJson.length > 50000) {
+                aiContext.selectedWidgetData = dataToSend.slice(0, 5).map(function (item) {
+                  return compactSource(item, 8);
+                });
+                aiJson = JSON.stringify(aiContext);
+              }
+
+              return aiJson;
             });
           });
         });
@@ -2046,7 +2074,7 @@
         }).then(function (r) {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.json();
-        }), 65000, "Ollama /chat");
+        }), 90000, "Ollama /chat");
       }
 
       function requestChatWithFallback() {

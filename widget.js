@@ -804,7 +804,7 @@
         if (!raw) return null;
         var pending = JSON.parse(raw);
         if (!pending || !pending.startedAt) return null;
-        if (Date.now() - pending.startedAt > 180000) {
+        if (Date.now() - pending.startedAt > 300000) {
           localStorage.removeItem(pendingKey);
           return null;
         }
@@ -837,12 +837,14 @@
         }));
         historySignature = storageStateSignature();
       } catch (_) {}
+      updatePendingUi();
     }
 
     function clearPendingState() {
       try {
         localStorage.removeItem(pendingKey);
       } catch (_) {}
+      updatePendingUi();
     }
 
     function renderHistoryState(showRestoredLabel) {
@@ -866,6 +868,7 @@
       }
 
       historySignature = storageStateSignature();
+      updatePendingUi();
       scrollChatToBottom(true);
     }
 
@@ -903,14 +906,20 @@
       var latestSignature = storageStateSignature();
       if (latestSignature !== historySignature) {
         renderHistoryState(false);
+      } else {
+        updatePendingUi();
       }
-    }, 500);
+    }, 350);
 
     function setBusy(busy) {
-      sendEl.disabled = busy;
-      inputEl.disabled = busy;
-      sendEl.style.opacity = busy ? ".55" : "1";
-      sendEl.textContent = busy ? "Думаю…" : "Отправить";
+      if (busy) {
+        sendEl.disabled = true;
+        inputEl.disabled = true;
+        sendEl.style.opacity = ".55";
+        sendEl.textContent = "Думаю…";
+      } else {
+        updatePendingUi();
+      }
     }
 
     function normalizeSearchText(text) {

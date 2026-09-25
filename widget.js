@@ -71,7 +71,10 @@
       '<div style="width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;background:#fff;border:1px solid #d9dde5;border-radius:14px;overflow:hidden;font-family:Arial,sans-serif;color:#111827">' +
         '<div style="padding:12px 14px;border-bottom:1px solid #eceff3;display:flex;align-items:center;justify-content:space-between;background:#fafbfc">' +
           '<div><div style="font-size:15px;font-weight:700">VISI AI</div><div style="font-size:11px;color:#6b7280">' + model + '</div></div>' +
-          '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
+          '<div style="display:flex;align-items:center;gap:10px">' +
+            '<button data-role="scan" style="height:30px;padding:0 10px;border:1px solid #d7dce5;border-radius:8px;background:#fff;color:#111827;font-size:11px;font-weight:700;cursor:pointer">Сканировать лист</button>' +
+            '<div><div data-role="status" style="font-size:11px;color:#9ca3af;text-align:right">Проверяю Ollama…</div><div data-role="context" style="font-size:10px;color:#9ca3af;text-align:right;margin-top:2px">Считываю контекст…</div></div>' +
+          '</div>' +
         '</div>' +
         '<div style="padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
@@ -79,6 +82,13 @@
             '<div data-role="preview-count" style="font-size:10px;color:#9ca3af"></div>' +
           '</div>' +
           '<div data-role="preview" style="max-height:145px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
+        '</div>' +
+        '<div data-role="scan-panel" style="display:none;padding:10px 14px;border-bottom:1px solid #eceff3;background:#fff">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">' +
+            '<div style="font-size:12px;font-weight:700">Виджеты на листе</div>' +
+            '<div data-role="scan-count" style="font-size:10px;color:#9ca3af"></div>' +
+          '</div>' +
+          '<div data-role="scan-results" style="max-height:170px;overflow:auto;border:1px solid #eceff3;border-radius:9px;background:#fafbfc"></div>' +
         '</div>' +
         '<div data-role="messages" style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#fff"></div>' +
         '<div style="padding:10px;border-top:1px solid #eceff3;background:#fafbfc">' +
@@ -97,6 +107,10 @@
     var contextEl = root.querySelector('[data-role="context"]');
     var previewEl = root.querySelector('[data-role="preview"]');
     var previewCountEl = root.querySelector('[data-role="preview-count"]');
+    var scanEl = root.querySelector('[data-role="scan"]');
+    var scanPanelEl = root.querySelector('[data-role="scan-panel"]');
+    var scanCountEl = root.querySelector('[data-role="scan-count"]');
+    var scanResultsEl = root.querySelector('[data-role="scan-results"]');
 
     function firstValue(v) {
       if (Array.isArray(v)) return v.length ? v[0] : "";
@@ -161,6 +175,113 @@
     }
 
     renderPreview();
+
+    function widgetInfo(item, index) {
+      var general = item && item.general ? item.general : {};
+      var guid = item && (item.guid || item.Guid || item.widgetGuid || item.id) || general.guid || general.widgetGuid || "";
+      var type = item && (item.type || item.widgetType) || general.type || "";
+      var title = item && (item.title || item.name || item.caption || item.displayName) || general.title || general.name || "";
+      return {
+        index: index + 1,
+        guid: guid ? String(guid) : "",
+        type: type ? String(type) : "",
+        title: title ? String(title) : ""
+      };
+    }
+
+    function renderWidgetScan(list) {
+      scanPanelEl.style.display = "block";
+      scanResultsEl.innerHTML = "";
+      scanCountEl.textContent = list.length + " найдено";
+
+      if (!list.length) {
+        var empty = document.createElement("div");
+        empty.textContent = "Visiology не вернула список виджетов";
+        empty.style.cssText = "padding:12px;font-size:11px;color:#9ca3af";
+        scanResultsEl.appendChild(empty);
+        return;
+      }
+
+      list.slice(0, 50).forEach(function (item, i) {
+        var info = widgetInfo(item, i);
+        var row = document.createElement("div");
+        row.style.cssText = "padding:8px 9px;border-bottom:" + (i === Math.min(list.length,50)-1 ? "0" : "1px solid #eceff3") + ";font-size:11px";
+        var top = document.createElement("div");
+        top.style.cssText = "display:flex;gap:8px;align-items:center";
+        var num = document.createElement("span");
+        num.textContent = "#" + info.index;
+        num.style.cssText = "color:#9ca3af;min-width:24px";
+        var label = document.createElement("span");
+        label.textContent = (info.title || info.type || "Виджет") + (info.type && info.title ? " · " + info.type : "");
+        label.style.cssText = "font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+        top.appendChild(num);
+        top.appendChild(label);
+
+        var guid = document.createElement("div");
+        guid.textContent = info.guid ? "GUID: " + info.guid : "GUID не найден в верхнем уровне объекта";
+        guid.style.cssText = "margin-top:3px;color:#6b7280;font-family:Consolas,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+
+        row.appendChild(top);
+        row.appendChild(guid);
+        scanResultsEl.appendChild(row);
+      });
+    }
+
+    function scanSheet() {
+      scanEl.disabled = true;
+      scanEl.textContent = "Сканирую…";
+
+      try {
+        if (typeof visApi !== "function") throw new Error("visApi() недоступен");
+        var api = visApi();
+        if (!api) throw new Error("visApi() вернул пустой объект");
+
+        var getter = api.getWidgets || api.GetWidgets;
+        if (typeof getter !== "function") {
+          var methods = Object.keys(api).filter(function (k) { return typeof api[k] === "function"; });
+          throw new Error("getWidgets() не найден. Методы: " + methods.slice(0, 30).join(", "));
+        }
+
+        var result = getter.call(api);
+        Promise.resolve(result).then(function (widgets) {
+          var list = Array.isArray(widgets) ? widgets :
+            widgets && Array.isArray(widgets.items) ? widgets.items :
+            widgets && Array.isArray(widgets.widgets) ? widgets.widgets : [];
+
+          renderWidgetScan(list);
+
+          fetch(endpoint + "/inspect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              capturedAt: new Date().toISOString(),
+              kind: "sheet-widget-scan",
+              count: list.length,
+              apiMethods: Object.keys(api).filter(function (k) { return typeof api[k] === "function"; }),
+              widgets: safeSnapshot(list, 0, [])
+            })
+          }).catch(function () {});
+        }).catch(function (e) {
+          renderWidgetScan([]);
+          scanCountEl.textContent = "Ошибка: " + e.message;
+        }).finally(function () {
+          scanEl.disabled = false;
+          scanEl.textContent = "Сканировать лист";
+        });
+      } catch (e) {
+        scanPanelEl.style.display = "block";
+        scanResultsEl.innerHTML = '<div style="padding:12px;font-size:11px;color:#b91c1c"></div>';
+        scanResultsEl.firstChild.textContent = e.message;
+        scanCountEl.textContent = "Ошибка";
+        scanEl.disabled = false;
+        scanEl.textContent = "Сканировать лист";
+      }
+    }
+
+    scanEl.onclick = function (e) {
+      e.stopPropagation();
+      scanSheet();
+    };
 
     function addMessage(role, text) {
       var row = document.createElement("div");

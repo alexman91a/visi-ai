@@ -803,20 +803,33 @@
       history.push({ role: "user", content: text });
       setBusy(true);
 
-      var waitBubble = addMessage("assistant", "…");
+      var waitBubble = addMessage("assistant", "Собираю данные релевантных виджетов…");
+      var contextJson = "{}";
 
-      fetch(endpoint + "/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: model,
-          messages: [
-            {
-              role: "system",
-              content: "Ты локальный ИИ-помощник внутри BI-дашборда Visiology. Отвечай кратко и по делу. Анализируй только данные, переданные ниже. Если данных недостаточно — прямо скажи об этом. ДАННЫЕ ВИДЖЕТА VISOLOGY:\n" + dashboardDataJson
-            }
-          ].concat(history)
-        })
+      collectDashboardContext(text)
+      .then(function (ctx) {
+        contextJson = ctx;
+        waitBubble.setText("Анализирую данные…");
+
+        return fetch(endpoint + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
+                  "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
+                  "Не выдумывай отсутствующие значения. Если данных конкретного виджета получить не удалось, прямо укажи это. " +
+                  "Если вывод основан на конкретном виджете, называй его лист и название или тип. " +
+                  "Ниже передана карта всего дашборда и данные релевантных виджетов для текущего вопроса.\n\n" +
+                  contextJson
+              }
+            ].concat(history)
+          })
+        });
       })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -824,11 +837,44 @@
       })
       .then(function (data) {
         var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
-        waitBubble.textContent = answer;
+        waitBubble.setText(answer);
         history.push({ role: "assistant", content: answer });
       })
       .catch(function (e) {
-        waitBubble.textContent = "Ошибка связи с Ollama: " + e.message;
+        if (endpoint !== localEndpoint) {
+          endpoint = localEndpoint;
+          statusEl.textContent = "Интернет недоступен · пробую локально";
+          return fetch(endpoint + "/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: model,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "Ты AI-аналитик внутри BI-системы Visiology. Используй Markdown. Не выдумывай отсутствующие значения.\n\n" +
+                    contextJson
+                }
+              ].concat(history)
+            })
+          })
+          .then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          })
+          .then(function (data) {
+            var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
+            waitBubble.setText(answer);
+            history.push({ role: "assistant", content: answer });
+            statusEl.textContent = "Ollama подключена локально";
+            statusEl.style.color = "#15803d";
+          });
+        }
+        throw e;
+      })
+      .catch(function (e) {
+        waitBubble.setText("**Ошибка связи с Ollama:** " + e.message);
       })
       .finally(function () {
         setBusy(false);

@@ -1370,6 +1370,63 @@
                 dataToSend = matched.length ? matched.slice(0, 16) : allWidgetData.slice(0, 12);
               }
 
+              function deriveMetric(item) {
+                if (!item || !Array.isArray(item.rows) || item.rows.length !== 1) return null;
+                var row = item.rows[0] || {};
+                var keys = Object.keys(row);
+                if (keys.length !== 1) return null;
+
+                var column = keys[0];
+                var value = row[column];
+                if (value === null || value === undefined || value === "") return null;
+
+                var raw = String(item.rawSummary || "");
+                var label = "";
+                var m = raw.match(/filterValue\[0\]\[0\]\s*==\s*["']([^"']+)["']/i);
+                if (m && m[1]) label = m[1];
+
+                var normalizedColumn = normalizeSearchText(column);
+                if (!label) {
+                  if (normalizedColumn === "количество заданий новое" || normalizedColumn.indexOf("количество заданий новое") >= 0) label = "Всего";
+                  else if (normalizedColumn.indexOf("выполнено") >= 0) label = "Выполнено";
+                  else if (normalizedColumn.indexOf("в работе") >= 0) label = "В работе";
+                  else if (normalizedColumn.indexOf("истекает срок") >= 0) label = "Истекает срок";
+                  else if (normalizedColumn.indexOf("не начато") >= 0) label = "Не начато";
+                  else if (normalizedColumn.indexOf("просрочено") >= 0) label = "Просрочено";
+                }
+
+                if (!label) return null;
+                return {
+                  label: label,
+                  value: value,
+                  sourceColumn: column,
+                  sourceWidgetGuid: item.info && item.info.guid || "",
+                  sourceWidgetTitle: item.info && item.info.title || ""
+                };
+              }
+
+              var metricMap = {};
+              allWidgetData.forEach(function (item) {
+                var metric = deriveMetric(item);
+                if (metric && !metricMap[metric.label]) metricMap[metric.label] = metric;
+              });
+              var metricOrder = ["Всего", "Выполнено", "В работе", "Просрочено", "Не начато", "Истекает срок"];
+              var derivedMetrics = metricOrder.map(function (label) {
+                return metricMap[label];
+              }).filter(Boolean);
+
+              var compactSources = dataToSend.map(function (item) {
+                return {
+                  info: item.info,
+                  selectedValues: item.selectedValues,
+                  error: item.error,
+                  relevance: item.relevance,
+                  rows: Array.isArray(item.rows) ? item.rows.slice(0, 100) : [],
+                  columnSummary: item.columnSummary || {},
+                  matches: item.data && Array.isArray(item.data.matches) ? item.data.matches.slice(0, 8) : []
+                };
+              });
+
               var context = {
                 dashboard: {
                   guid: getGuid(dashboard),
@@ -1381,6 +1438,7 @@
                 strongEntityTokens: strongTokens,
                 queryTokens: tokens,
                 filterAction: filterAction,
+                derivedMetrics: derivedMetrics,
                 allWidgets: widgetIndex,
                 searchedWidgetCount: selected.length,
                 matchedWidgetCount: matched.length,
@@ -1389,8 +1447,7 @@
                 note:
                   "Если в вопросе указана сущность и найден соответствующий фильтр, VISI AI временно применяет фильтр, " +
                   "считывает данные виджетов целевого листа и затем восстанавливает прежнее значение фильтра. " +
-                  "Для каждого виджета передаются строки rows и агрегированные значения columnSummary. " +
-                  "TextWidget и UserWidget также анализируются."
+                  "derivedMetrics — показатели, восстановленные по фактическим карточкам дашборда; их label соответствует подписи карточки."
               };
 
               postDiagnostic({
@@ -1401,9 +1458,21 @@
                 context: context
               });
 
-              var json = JSON.stringify(context);
-              if (json.length > 260000) json = json.slice(0, 260000) + "\n[TRUNCATED]";
-              return json;
+              var aiContext = {
+                dashboardName: context.dashboard.name,
+                requestedSheet: context.requestedSheet,
+                entityHint: entityHint,
+                filterAction: filterAction,
+                derivedMetrics: derivedMetrics,
+                searchedWidgetCount: selected.length,
+                matchedWidgetCount: matched.length,
+                selectedWidgetData: compactSources,
+                note:
+                  "При ответе в первую очередь используй derivedMetrics: это значения карточек целевого листа после применения фильтра сущности. " +
+                  "Не переименовывай метрики по sourceColumn, если label уже задан."
+              };
+
+              return JSON.stringify(aiContext);
             });
           });
         });

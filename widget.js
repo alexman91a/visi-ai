@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.7";
+    var version = "0.8.8";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -14,7 +14,7 @@
       dashboardGuidForHistory = location.pathname;
     }
     var historyKey = "visi-ai-history:" + dashboardGuidForHistory;
-    var pendingKey = "visi-ai-pending:" + dashboardGuidForHistory;
+    var pendingKey = "visi-ai-pending-v2:" + dashboardGuidForHistory;
     var sessionContextKey = "visi-ai-session-context-v2:" + dashboardGuidForHistory;
     var history = [];
     var historySignature = "";
@@ -496,6 +496,31 @@
       };
     }
 
+    function withTimeout(promise, ms, label) {
+      return new Promise(function (resolve, reject) {
+        var timer = setTimeout(function () {
+          reject(new Error((label || "Операция Visiology") + ": timeout " + ms + " ms"));
+        }, ms);
+
+        Promise.resolve(promise).then(function (value) {
+          clearTimeout(timer);
+          resolve(value);
+        }, function (err) {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+    }
+
+    function isLikelyDashboardQuestion(question, analysisRequest) {
+      if (analysisRequest && analysisRequest.inherited) return true;
+
+      var qn = normalizeSearchText(question);
+      if (!qn) return false;
+
+      return /(дашборд|лист|виджет|данн|таблиц|график|фильтр|объект|проект|лини|метро|этап|задач|задан|проблем|просроч|выполн|срок|план|факт|статист|показател|аномал|риск|отставан|документ|раздел|систем|отдел|дисциплин|ответствен)/i.test(qn);
+    }
+
     function loadFullDashboard(api) {
       var getter = api && (api.getDashboard || api.GetDashboard);
       if (typeof getter === "function") {
@@ -928,7 +953,7 @@
         if (!raw) return null;
         var pending = JSON.parse(raw);
         if (!pending || !pending.startedAt) return null;
-        if (Date.now() - pending.startedAt > 300000) {
+        if (Date.now() - pending.startedAt > 120000) {
           localStorage.removeItem(pendingKey);
           return null;
         }
@@ -1337,10 +1362,13 @@
       var api = visApi();
       var currentGetter = api.getWidgets || api.GetWidgets;
       var currentPromise = typeof currentGetter === "function"
-        ? Promise.resolve(currentGetter.call(api)).catch(function () { return []; })
+        ? withTimeout(Promise.resolve().then(function () { return currentGetter.call(api); }), 5000, "getWidgets").catch(function () { return []; })
         : Promise.resolve([]);
 
-      return Promise.all([loadFullDashboard(api), currentPromise]).then(function (parts) {
+      return Promise.all([
+        withTimeout(loadFullDashboard(api), 7000, "getDashboard"),
+        currentPromise
+      ]).then(function (parts) {
         var dashboard = parts[0] && parts[0].data ? parts[0].data : {};
         var currentRaw = parts[1];
         var current = Array.isArray(currentRaw) ? currentRaw :
@@ -1446,9 +1474,11 @@
             });
           }
 
-          return Promise.resolve()
-            .then(function () { return dataGetter.call(api, info.guid); })
-            .then(function (data) {
+          return withTimeout(
+            Promise.resolve().then(function () { return dataGetter.call(api, info.guid); }),
+            6000,
+            "getWidgetDataByGuid " + info.guid
+          ).then(function (data) {
               var targeted = targetedDataSnapshot(data, question);
               var rows = extractRowsForAi(data, explicitSheets.length ? 160 : 80);
               var rowSummary = summarizeRows(rows);
@@ -1628,9 +1658,11 @@
           });
 
           return Promise.all(filters.map(function (filterInfo) {
-            return Promise.resolve()
-              .then(function () { return dataGetter.call(api, filterInfo.guid); })
-              .then(function (data) {
+            return withTimeout(
+              Promise.resolve().then(function () { return dataGetter.call(api, filterInfo.guid); }),
+              5000,
+              "filter data " + filterInfo.guid
+            ).then(function (data) {
                 var targeted = targetedDataSnapshot(data, question);
                 var best = targeted.matches && targeted.matches.length ? targeted.matches[0] : null;
                 var normalizedTitle = normalizeSearchText(filterInfo.title);

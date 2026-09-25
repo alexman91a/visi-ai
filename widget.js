@@ -5,8 +5,9 @@
 
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
+    var localFallbackReady = false;
     var model = "qwen3-harness8k:14b";
-    var version = "0.8.8";
+    var version = "0.8.9";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -2030,7 +2031,7 @@
           userMessages.push({ role: "user", content: text });
         }
 
-        return fetch(targetEndpoint + "/chat", {
+        return withTimeout(fetch(targetEndpoint + "/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2045,10 +2046,34 @@
         }).then(function (r) {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.json();
+        }), 65000, "Ollama /chat");
+      }
+
+      function requestChatWithFallback() {
+        var firstEndpoint = endpoint;
+        return requestChat(firstEndpoint).catch(function (e) {
+          if (!localFallbackReady || firstEndpoint === localEndpoint) throw e;
+          endpoint = localEndpoint;
+          try {
+            statusEl.textContent = "Интернет недоступен · использую локальный резерв";
+          } catch (_) {}
+          return requestChat(localEndpoint);
         });
       }
 
       var dashboardQuestion = isLikelyDashboardQuestion(text, analysisRequest);
+
+      postDiagnostic({
+        kind: "question-start",
+        version: version,
+        capturedAt: new Date().toISOString(),
+        question: text,
+        endpoint: endpoint,
+        dashboardGuid: dashboardGuidForHistory,
+        dashboardQuestion: dashboardQuestion,
+        analysisQuestion: analysisRequest.text
+      });
+
       var contextPromise = dashboardQuestion
         ? withTimeout(collectDashboardContext(analysisRequest.text), 22000, "Сбор контекста Visiology")
         : Promise.resolve(JSON.stringify({
@@ -2093,15 +2118,32 @@
         }
 
         updatePendingPhase("Анализирую данные…");
-        return requestChat(endpoint);
+        return requestChatWithFallback();
       })
       .catch(function (e) {
-        if (endpoint === localEndpoint) throw e;
-        endpoint = localEndpoint;
-        try {
-          statusEl.textContent = "Интернет недоступен · пробую локально";
-        } catch (_) {}
-        return requestChat(localEndpoint);
+        contextObject = {
+          mode: "degraded",
+          contextError: e && e.message ? e.message : String(e),
+          searchedWidgetCount: 0,
+          matchedWidgetCount: 0,
+          selectedWidgetData: [],
+          note: "Visiology не успела вернуть полный контекст. Не выдумывай данные дашборда."
+        };
+        contextJson = JSON.stringify(contextObject);
+        renderAnswerData(contextObject, text);
+        updatePendingPhase("Visiology отвечает медленно; формирую ответ без зависания…");
+
+        postDiagnostic({
+          kind: "question-context-error",
+          version: version,
+          capturedAt: new Date().toISOString(),
+          question: text,
+          endpoint: endpoint,
+          dashboardGuid: dashboardGuidForHistory,
+          error: contextObject.contextError
+        });
+
+        return requestChatWithFallback();
       })
       .then(function (data) {
         var answer = data && data.message && data.message.content ? data.message.content : "Пустой ответ";
@@ -2189,6 +2231,7 @@
         .then(function (data) {
           if (!data || !data.ok) throw new Error("health=false");
           endpoint = url;
+          if (url === localEndpoint) localFallbackReady = true;
           statusEl.textContent = label + " · Ollama подключена";
           statusEl.style.color = "#15803d";
           return data;

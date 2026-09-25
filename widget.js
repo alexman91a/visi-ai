@@ -7,7 +7,7 @@
     var localEndpoint = "http://127.0.0.1:11436";
     var localFallbackReady = false;
     var model = "qwen3-harness8k:14b";
-    var version = "0.9.1";
+    var version = "0.10.0";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -230,6 +230,12 @@
         empty.style.cssText = "padding:11px;font-size:10px;line-height:1.4;color:#9ca3af";
         previewEl.appendChild(empty);
         return;
+      }
+
+      if (context.mode === "data-model") {
+        var modelSources = Array.isArray(context.selectedTables) ? context.selectedTables : [];
+        previewCountEl.textContent =
+          "модель данных · " + (context.tableCount || 0) + " таблиц · " + modelSources.length + " выбрано";
       }
 
       if (context.mode === "chat") {
@@ -561,6 +567,458 @@
       }).then(function (data) {
         return { source: "dashboard-service REST", data: data };
       });
+    }
+
+    function findVisiologyAccessToken() {
+      function inspect(value, depth) {
+        if (depth > 5 || value === null || value === undefined) return "";
+
+        if (typeof value === "string") {
+          var text = value.trim();
+          if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(text)) {
+            return text;
+          }
+
+          if ((text[0] === "{" || text[0] === "[") && text.length < 200000) {
+            try { return inspect(JSON.parse(text), depth + 1); } catch (_) {}
+          }
+          return "";
+        }
+
+        if (typeof value !== "object") return "";
+
+        var priority = ["access_token", "accessToken", "token"];
+        for (var pi = 0; pi < priority.length; pi++) {
+          if (Object.prototype.hasOwnProperty.call(value, priority[pi])) {
+            var direct = inspect(value[priority[pi]], depth + 1);
+            if (direct) return direct;
+          }
+        }
+
+        var keys = Object.keys(value).slice(0, 80);
+        for (var i = 0; i < keys.length; i++) {
+          var nested = inspect(value[keys[i]], depth + 1);
+          if (nested) return nested;
+        }
+        return "";
+      }
+
+      var stores = [];
+      try { stores.push(localStorage); } catch (_) {}
+      try { stores.push(sessionStorage); } catch (_) {}
+
+      for (var si = 0; si < stores.length; si++) {
+        var store = stores[si];
+        var preferred = [];
+        var other = [];
+
+        for (var i = 0; i < store.length; i++) {
+          var key = store.key(i);
+          if (!key) continue;
+          if (/auth|token|user|oidc|keycloak/i.test(key)) preferred.push(key);
+          else other.push(key);
+        }
+
+        var keys = preferred.concat(other).slice(0, 120);
+        for (var ki = 0; ki < keys.length; ki++) {
+          try {
+            var token = inspect(store.getItem(keys[ki]), 0);
+            if (token) return token;
+          } catch (_) {}
+        }
+      }
+
+      return "";
+    }
+
+    function visiologyModelFetch(url, options) {
+      options = options || {};
+      var headers = options.headers || {};
+      var token = findVisiologyAccessToken();
+
+      var mergedHeaders = {};
+      Object.keys(headers).forEach(function (key) { mergedHeaders[key] = headers[key]; });
+      if (token) mergedHeaders.Authorization = "Bearer " + token;
+
+      return fetch(url, {
+        method: options.method || "GET",
+        headers: mergedHeaders,
+        body: options.body,
+        credentials: "include",
+        cache: "no-store"
+      }).then(function (r) {
+        if (!r.ok) {
+          if (r.status === 401) {
+            throw new Error("Formula Engine HTTP 401: токен Visiology недоступен из UserWidget");
+          }
+          throw new Error("Formula Engine HTTP " + r.status);
+        }
+        return r.json();
+      });
+    }
+
+    function daxEscapeTable(value) {
+      return String(value == null ? "" : value).replace(/'/g, "''");
+    }
+
+    function daxEscapeColumn(value) {
+      return String(value == null ? "" : value).replace(/\]/g, "]]");
+    }
+
+    function daxEscapeString(value) {
+      return String(value == null ? "" : value).replace(/"/g, '""');
+    }
+
+    function compactQueryRows(data, resultIndex) {
+      var results = data && Array.isArray(data.results) ? data.results : [];
+      var result = results[resultIndex || 0] || {};
+      var cols = Array.isArray(result.cols) ? result.cols : [];
+      var values = Array.isArray(result.values) ? result.values : [];
+      var rows = [];
+
+      values.slice(0, 120).forEach(function (rowValues) {
+        if (!Array.isArray(rowValues)) return;
+        var row = {};
+        rowValues.forEach(function (value, index) {
+          var col = cols[index] || {};
+          var field = col.field || col.name || col.displayName || ("col" + index);
+          row[field] = value;
+        });
+        rows.push(row);
+      });
+
+      return rows;
+    }
+
+    function compactQueryCount(data) {
+      var results = data && Array.isArray(data.results) ? data.results : [];
+      var first = results[0] || {};
+      var values = Array.isArray(first.values) ? first.values : [];
+      if (values.length && Array.isArray(values[0]) && values[0].length) {
+        var n = Number(values[0][0]);
+        if (!isNaN(n)) return n;
+      }
+      return null;
+    }
+
+    function scoreModelTable(table, tokens, question) {
+      var tableName = String(table && table.name || "");
+      var columns = table && Array.isArray(table.columns) ? table.columns : [];
+      var measures = table && Array.isArray(table.measures) ? table.measures : [];
+      var qn = normalizeSearchText(question);
+      var tableText = normalizeSearchText(tableName);
+      var columnText = normalizeSearchText(columns.map(function (x) { return x && x.name || ""; }).join(" "));
+      var measureText = normalizeSearchText(measures.map(function (x) { return x && x.name || ""; }).join(" "));
+      var score = 0;
+
+      tokens.forEach(function (token) {
+        if (normalizedContainsToken(tableText, token)) score += 28;
+        if (normalizedContainsToken(columnText, token)) score += 14;
+        if (normalizedContainsToken(measureText, token)) score += 16;
+      });
+
+      if (/документ/i.test(qn) && /документ|комплект|док/i.test(columnText + " " + tableText)) score += 22;
+      if (/комплект/i.test(qn) && /комплект|количеств|кол-во/i.test(columnText + " " + measureText)) score += 22;
+      if (/проект|мбп/i.test(qn) && /проект|объект|имя|наимен|код/i.test(columnText)) score += 14;
+      if (/проблем/i.test(qn) && /проблем|вопрос|риск/i.test(columnText + " " + tableText)) score += 18;
+      if (/срок|просроч/i.test(qn) && /срок|дата|просроч/i.test(columnText)) score += 18;
+
+      return score;
+    }
+
+    function queryModelTable(workspaceId, datasetId, expression) {
+      var url = location.origin + "/v3/formula-engine/api/v1/workspaces/" +
+        encodeURIComponent(workspaceId) + "/datasets/" +
+        encodeURIComponent(datasetId) + "/model/query";
+
+      return withTimeout(visiologyModelFetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          expression: expression,
+          format: "JsonCompact"
+        })
+      }), 7000, "Formula Engine query");
+    }
+
+    function collectDataModelContext(question) {
+      if (typeof visApi !== "function") {
+        return Promise.reject(new Error("visApi() недоступен"));
+      }
+
+      var api = visApi();
+
+      return withTimeout(loadFullDashboard(api), 6000, "getDashboard for data model")
+        .then(function (full) {
+          var dashboard = full && full.data ? full.data : {};
+          var ds = dashboard.dataset || {};
+          var ids = parseUrlIds();
+          var workspaceId = ds.workspaceId || dashboard.workspaceId || ids.workspaceId || "";
+          var datasetId = ds.datasetId || ds.id || dashboard.datasetId || "";
+
+          if (!workspaceId || !datasetId) {
+            throw new Error("У дашборда не найден datasetId");
+          }
+
+          var modelUrl = location.origin + "/v3/formula-engine/api/v1/workspaces/" +
+            encodeURIComponent(workspaceId) + "/datasets/" +
+            encodeURIComponent(datasetId) + "/model";
+
+          return withTimeout(visiologyModelFetch(modelUrl, {
+            headers: { "Accept": "application/json" }
+          }), 6000, "Formula Engine model").then(function (model) {
+            var tables = model && Array.isArray(model.tables)
+              ? model.tables
+              : model && model.data && Array.isArray(model.data.tables)
+                ? model.data.tables
+                : [];
+
+            if (!tables.length) throw new Error("В модели данных не найдены таблицы");
+
+            var tokens = questionTokens(question);
+            var scored = tables.map(function (table) {
+              return {
+                table: table,
+                score: scoreModelTable(table, tokens, question)
+              };
+            }).sort(function (a, b) {
+              return b.score - a.score;
+            });
+
+            var selected = scored.filter(function (x) { return x.score > 0; }).slice(0, 6);
+            if (!selected.length) selected = scored.slice(0, Math.min(5, scored.length));
+
+            var distinctiveTokens = tokens.filter(function (token) {
+              return !/^(документ|документ|комплект|количеств|проект|данн|таблиц|всег)$/i.test(tokenRoot(token));
+            });
+            var entityTerm = "";
+
+            distinctiveTokens.sort(function (a, b) {
+              var ad = /\d/.test(a) ? 1 : 0;
+              var bd = /\d/.test(b) ? 1 : 0;
+              if (ad !== bd) return bd - ad;
+              return b.length - a.length;
+            });
+
+            if (distinctiveTokens.length) entityTerm = distinctiveTokens[0];
+
+            function previewOne(entry) {
+              var table = entry.table || {};
+              var tableName = String(table.name || "");
+              if (!tableName) return Promise.resolve(null);
+
+              var tableDax = daxEscapeTable(tableName);
+              var previewExpression =
+                "EVALUATE {COUNTROWS('" + tableDax + "')} " +
+                "EVALUATE TOPNSKIP(60,0,'" + tableDax + "')";
+
+              return queryModelTable(workspaceId, datasetId, previewExpression)
+                .then(function (data) {
+                  return {
+                    name: tableName,
+                    id: table.id || "",
+                    score: entry.score,
+                    columns: (Array.isArray(table.columns) ? table.columns : []).slice(0, 80).map(function (col) {
+                      return {
+                        name: col && col.name || "",
+                        dataType: col && col.dataType,
+                        isHidden: !!(col && col.isHidden)
+                      };
+                    }),
+                    measures: (Array.isArray(table.measures) ? table.measures : []).slice(0, 40).map(function (m) {
+                      return { name: m && m.name || "" };
+                    }),
+                    totalRows: compactQueryCount(data),
+                    rows: compactQueryRows(data, 1),
+                    matchedBy: null
+                  };
+                })
+                .catch(function (e) {
+                  return {
+                    name: tableName,
+                    id: table.id || "",
+                    score: entry.score,
+                    columns: (Array.isArray(table.columns) ? table.columns : []).slice(0, 80).map(function (col) {
+                      return { name: col && col.name || "", dataType: col && col.dataType };
+                    }),
+                    measures: [],
+                    totalRows: null,
+                    rows: [],
+                    error: e && e.message ? e.message : String(e),
+                    matchedBy: null
+                  };
+                });
+            }
+
+            return Promise.all(selected.map(previewOne)).then(function (previews) {
+              previews = previews.filter(Boolean);
+
+              function rowContains(rows, term) {
+                if (!term) return false;
+                return rows.some(function (row) {
+                  return normalizedContainsToken(JSON.stringify(row), term);
+                });
+              }
+
+              var alreadyMatched = previews.filter(function (preview) {
+                return rowContains(preview.rows || [], entityTerm);
+              });
+
+              if (!entityTerm || alreadyMatched.length) {
+                return {
+                  workspaceId: workspaceId,
+                  datasetId: datasetId,
+                  tableCount: tables.length,
+                  selectedTables: previews,
+                  entityTerm: entityTerm
+                };
+              }
+
+              var candidateColumns = [];
+              previews.slice(0, 4).forEach(function (preview) {
+                (preview.columns || []).forEach(function (col) {
+                  var name = String(col.name || "");
+                  var n = normalizeSearchText(name);
+                  var bonus = 0;
+                  if (/проект|объект|имя|наимен|код|номер|лини|участ|этап|мбп/i.test(n)) bonus += 20;
+                  if (/строк|string|text/i.test(String(col.dataType || ""))) bonus += 8;
+                  candidateColumns.push({
+                    preview: preview,
+                    column: col,
+                    score: bonus + (preview.score || 0)
+                  });
+                });
+              });
+
+              candidateColumns.sort(function (a, b) { return b.score - a.score; });
+              candidateColumns = candidateColumns.slice(0, 12);
+
+              function findMatch(index) {
+                if (index >= candidateColumns.length) {
+                  return Promise.resolve({
+                    workspaceId: workspaceId,
+                    datasetId: datasetId,
+                    tableCount: tables.length,
+                    selectedTables: previews,
+                    entityTerm: entityTerm
+                  });
+                }
+
+                var candidate = candidateColumns[index];
+                var tableName = candidate.preview.name;
+                var columnName = candidate.column.name;
+                if (!tableName || !columnName) return findMatch(index + 1);
+
+                var t = daxEscapeTable(tableName);
+                var col = daxEscapeColumn(columnName);
+                var term = daxEscapeString(entityTerm);
+                var ref = "'" + t + "'[" + col + "]";
+                var filter = "FILTER('" + t + "', CONTAINSSTRING(" + ref + ', "' + term + '"))';
+                var expression =
+                  "EVALUATE {COUNTROWS(" + filter + ")} " +
+                  "EVALUATE TOPN(80," + filter + ")";
+
+                return queryModelTable(workspaceId, datasetId, expression)
+                  .then(function (data) {
+                    var rows = compactQueryRows(data, 1);
+                    var count = compactQueryCount(data);
+
+                    if ((count !== null && count > 0) || rows.length) {
+                      candidate.preview.rows = rows;
+                      candidate.preview.filteredRows = count;
+                      candidate.preview.matchedBy = {
+                        column: columnName,
+                        term: entityTerm
+                      };
+
+                      var reordered = [candidate.preview].concat(previews.filter(function (x) {
+                        return x !== candidate.preview;
+                      }));
+
+                      return {
+                        workspaceId: workspaceId,
+                        datasetId: datasetId,
+                        tableCount: tables.length,
+                        selectedTables: reordered,
+                        entityTerm: entityTerm
+                      };
+                    }
+
+                    return findMatch(index + 1);
+                  })
+                  .catch(function () {
+                    return findMatch(index + 1);
+                  });
+              }
+
+              return findMatch(0);
+            });
+          });
+        })
+        .then(function (dataContext) {
+          var selectedTables = dataContext.selectedTables || [];
+          var useful = selectedTables.filter(function (table) {
+            return (table.rows && table.rows.length) || table.totalRows !== null;
+          });
+
+          var context = {
+            mode: "data-model",
+            directTableAccess: true,
+            dataset: {
+              workspaceId: dataContext.workspaceId,
+              datasetId: dataContext.datasetId
+            },
+            tableCount: dataContext.tableCount,
+            entityTerm: dataContext.entityTerm,
+            selectedTables: useful.slice(0, 6),
+            searchedWidgetCount: dataContext.tableCount || 0,
+            matchedWidgetCount: useful.length,
+            selectedWidgetData: useful.slice(0, 6).map(function (table) {
+              return {
+                info: {
+                  title: table.name,
+                  type: "DataModelTable",
+                  sheet: "Модель данных"
+                },
+                relevance: table.score || 0,
+                rows: (table.rows || []).slice(0, 80),
+                columnSummary: {},
+                data: { matches: [] },
+                error: table.error || ""
+              };
+            }),
+            note:
+              "Это прямой доступ к таблицам модели данных Visiology через Formula Engine. " +
+              "selectedTables содержит реальные строки таблиц, их поля, общее количество строк и при наличии matchedBy — фильтрацию по сущности из вопроса."
+          };
+
+          postDiagnostic({
+            kind: "data-model-context",
+            version: version,
+            capturedAt: new Date().toISOString(),
+            question: question,
+            dashboardGuid: dashboardGuidForHistory,
+            tableCount: context.tableCount,
+            entityTerm: context.entityTerm,
+            selectedTables: context.selectedTables.map(function (t) {
+              return {
+                name: t.name,
+                score: t.score,
+                totalRows: t.totalRows,
+                filteredRows: t.filteredRows,
+                matchedBy: t.matchedBy,
+                columns: (t.columns || []).map(function (x) { return x.name; }).slice(0, 40),
+                rowCount: (t.rows || []).length,
+                error: t.error
+              };
+            })
+          });
+
+          return context;
+        });
     }
 
     function renderDashboardScan(scan, source, currentWidgets) {
@@ -2076,6 +2534,8 @@
           "Ты AI-аналитик внутри BI-системы Visiology. Отвечай на русском, кратко и содержательно. " +
           "Используй Markdown: заголовки, списки и таблицы, когда это улучшает читаемость. " +
           "Не выдумывай отсутствующие значения и не предлагай пользователю проверять фильтры, если VISI AI уже получил данные. " +
+          "Если context.mode=data-model, selectedTables — это прямые строки таблиц модели данных Visiology через Formula Engine; используй их как первичный источник фактов. " +
+          "Если у таблицы есть filteredRows и matchedBy, filteredRows — количество строк, соответствующих найденной сущности, а rows — примеры этих строк. " +
           "Если в контексте есть derivedMetrics, считай их приоритетным фактическим представлением карточек дашборда после фильтрации. " +
           "Используй label и value из derivedMetrics буквально. Не переименовывай метрику по sourceColumn. " +
           "Если filterAction.applied=true, сущность была найдена и фильтр реально применён; не утверждай, что объект отсутствует. " +
@@ -2178,7 +2638,25 @@
       });
 
       var contextPromise = dashboardQuestion
-        ? withTimeout(collectDashboardContext(analysisRequest.text), 22000, "Сбор контекста Visiology")
+        ? withTimeout(collectDataModelContext(analysisRequest.text), 18000, "Чтение таблиц модели Visiology")
+            .then(function (modelContext) {
+              if (modelContext && modelContext.selectedTables && modelContext.selectedTables.length) {
+                updatePendingPhase("Нашёл таблицы модели данных; анализирую строки…");
+                return JSON.stringify(modelContext);
+              }
+              return withTimeout(collectDashboardContext(analysisRequest.text), 22000, "Сбор контекста Visiology");
+            })
+            .catch(function (modelError) {
+              postDiagnostic({
+                kind: "data-model-error",
+                version: version,
+                capturedAt: new Date().toISOString(),
+                question: text,
+                dashboardGuid: dashboardGuidForHistory,
+                error: modelError && modelError.message ? modelError.message : String(modelError)
+              });
+              return withTimeout(collectDashboardContext(analysisRequest.text), 22000, "Сбор контекста Visiology");
+            })
         : Promise.resolve(JSON.stringify({
             mode: "chat",
             searchedWidgetCount: 0,

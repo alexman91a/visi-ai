@@ -1526,6 +1526,50 @@
             return !genericRoots[root];
           }));
 
+          var queryIntent = {
+            line: q.indexOf("лини") >= 0 && (q.indexOf("метро") >= 0 || q.indexOf("метрополит") >= 0),
+            stage: q.indexOf("этап") >= 0,
+            project: q.indexOf("проект") >= 0,
+            object: q.indexOf("объект") >= 0 || q.indexOf("участ") >= 0
+          };
+
+          function filterDimensionBonus(title, value) {
+            var t = normalizeSearchText(title);
+            var v = normalizeSearchText(value);
+            var bonus = 0;
+
+            if (queryIntent.line) {
+              if (t === "линия") bonus += 220;
+              else if (t.indexOf("лини") >= 0) bonus += 140;
+
+              if (t.indexOf("этап") >= 0) bonus -= 120;
+              if (t.indexOf("проект") >= 0 || t.indexOf("участ") >= 0 || t.indexOf("объект") >= 0) bonus -= 70;
+
+              var words = v ? v.split(/\s+/).filter(Boolean).length : 0;
+              var directHits = 0;
+              distinctiveRoots.forEach(function (rootToken) {
+                if (normalizedContainsToken(v, rootToken)) directHits++;
+              });
+              if (directHits && words > 0 && words <= 5) bonus += 80;
+              else if (directHits && words <= 9) bonus += 35;
+            }
+
+            if (queryIntent.stage) {
+              if (t.indexOf("этап") >= 0) bonus += 160;
+              if (t.indexOf("лини") >= 0 && t.indexOf("этап") < 0) bonus -= 40;
+            }
+
+            if (queryIntent.project) {
+              if (t.indexOf("проект") >= 0) bonus += 140;
+            }
+
+            if (queryIntent.object) {
+              if (t.indexOf("объект") >= 0 || t.indexOf("участ") >= 0) bonus += 120;
+            }
+
+            return bonus;
+          }
+
           function sheetAffinity(sheetGuid) {
             var score = 0;
             widgetIndex.forEach(function (widgetInfo) {
@@ -1611,16 +1655,18 @@
                 });
                 var distinctiveBonus = distinctiveHits * 45;
                 var distinctivePenalty = distinctiveRoots.length && distinctiveHits === 0 ? -80 : 0;
+                var dimensionBonus = filterDimensionBonus(filterInfo.title, filterValue);
 
                 return {
                   info: filterInfo,
                   targeted: targeted,
                   score: best
-                    ? best.score + titleBonus + visibilityBonus + affinityBonus + intentBonus + distinctiveBonus + distinctivePenalty
+                    ? best.score + titleBonus + visibilityBonus + affinityBonus + intentBonus + distinctiveBonus + distinctivePenalty + dimensionBonus
                     : 0,
                   best: best,
                   filterValue: filterValue,
-                  distinctiveHits: distinctiveHits
+                  distinctiveHits: distinctiveHits,
+                  dimensionBonus: dimensionBonus
                 };
               })
               .catch(function () {
@@ -1635,7 +1681,7 @@
                 applied: false,
                 reason: "Подходящий фильтр сущности не найден",
                 candidates: candidates.slice(0, 5).map(function (x) {
-                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue, distinctiveHits: x.distinctiveHits || 0 };
+                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue, distinctiveHits: x.distinctiveHits || 0, dimensionBonus: x.dimensionBonus || 0 };
                 })
               };
             }
@@ -1652,7 +1698,7 @@
                 value: winner.filterValue,
                 previous: previous,
                 candidates: candidates.slice(0, 5).map(function (x) {
-                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue };
+                  return { title: x.info.title, sheet: x.info.sheet, score: x.score, value: x.filterValue, distinctiveHits: x.distinctiveHits || 0, dimensionBonus: x.dimensionBonus || 0 };
                 })
               };
             });

@@ -1210,14 +1210,35 @@
 
       var waitBubble = addMessage("assistant", "Собираю данные релевантных виджетов…");
       var contextJson = "{}";
+      var contextObject = null;
 
       collectDashboardContext(text)
       .then(function (ctx) {
         contextJson = ctx;
         try {
-          renderAnswerData(JSON.parse(ctx), text);
+          contextObject = JSON.parse(ctx);
+          renderAnswerData(contextObject, text);
+          lastDiagnostic = {
+            kind: "question-context",
+            version: version,
+            capturedAt: new Date().toISOString(),
+            question: text,
+            endpoint: endpoint,
+            dashboardGuid: dashboardGuidForHistory,
+            context: contextObject
+          };
         } catch (_) {
+          contextObject = null;
           renderAnswerData(null, text);
+          lastDiagnostic = {
+            kind: "question-context",
+            version: version,
+            capturedAt: new Date().toISOString(),
+            question: text,
+            endpoint: endpoint,
+            dashboardGuid: dashboardGuidForHistory,
+            contextRaw: ctx
+          };
         }
         waitBubble.setText("Анализирую данные…");
 
@@ -1250,6 +1271,18 @@
         waitBubble.setText(answer);
         history.push({ role: "assistant", content: answer });
         saveHistory();
+
+        lastDiagnostic = {
+          kind: "question-result",
+          version: version,
+          capturedAt: new Date().toISOString(),
+          question: text,
+          endpoint: endpoint,
+          dashboardGuid: dashboardGuidForHistory,
+          answer: answer,
+          context: contextObject
+        };
+        postDiagnostic(lastDiagnostic);
       })
       .catch(function (e) {
         if (endpoint !== localEndpoint) {
@@ -1279,6 +1312,19 @@
             waitBubble.setText(answer);
             history.push({ role: "assistant", content: answer });
             saveHistory();
+
+            lastDiagnostic = {
+              kind: "question-result",
+              version: version,
+              capturedAt: new Date().toISOString(),
+              question: text,
+              endpoint: endpoint,
+              dashboardGuid: dashboardGuidForHistory,
+              answer: answer,
+              context: contextObject
+            };
+            postDiagnostic(lastDiagnostic);
+
             statusEl.textContent = "Ollama подключена локально";
             statusEl.style.color = "#15803d";
           });
@@ -1287,6 +1333,17 @@
       })
       .catch(function (e) {
         waitBubble.setText("**Ошибка связи с Ollama:** " + e.message);
+        lastDiagnostic = {
+          kind: "question-result",
+          version: version,
+          capturedAt: new Date().toISOString(),
+          question: text,
+          endpoint: endpoint,
+          dashboardGuid: dashboardGuidForHistory,
+          error: e && e.message ? e.message : String(e),
+          context: contextObject
+        };
+        postDiagnostic(lastDiagnostic);
       })
       .finally(function () {
         setBusy(false);

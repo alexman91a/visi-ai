@@ -6,7 +6,7 @@
     var endpoint = "https://mine-relocation-coastal-hansen.trycloudflare.com";
     var localEndpoint = "http://127.0.0.1:11436";
     var model = "qwen3-harness8k:14b";
-    var version = "0.7.4";
+    var version = "0.8.0";
     var dashboardGuidForHistory = "";
     try {
       dashboardGuidForHistory = new URLSearchParams(location.search).get("dashboardGuid") || location.pathname;
@@ -1028,6 +1028,92 @@
       };
     }
 
+    function extractRowsForAi(widgetData, maxRows) {
+      var frame = widgetData && widgetData.data && widgetData.data.primaryData
+        ? widgetData.data.primaryData
+        : widgetData && widgetData.primaryData
+          ? widgetData.primaryData
+          : null;
+
+      var items = frame && Array.isArray(frame.items) ? frame.items : [];
+      var rows = [];
+
+      items.slice(0, maxRows || 120).forEach(function (item) {
+        if (!item || typeof item !== "object") return;
+
+        var cols = Array.isArray(item.cols) && item.cols.length
+          ? item.cols
+          : (frame && Array.isArray(frame.cols) ? frame.cols : []);
+
+        var keyValues = Array.isArray(item.formattedKeys) && item.formattedKeys.length
+          ? item.formattedKeys
+          : (Array.isArray(item.keys) ? item.keys : []);
+
+        var measureValues = Array.isArray(item.formattedValues) && item.formattedValues.length
+          ? item.formattedValues
+          : (Array.isArray(item.values) ? item.values : []);
+
+        var values = keyValues.concat(measureValues);
+        var row = {};
+
+        if (cols.length && values.length) {
+          for (var i = 0; i < Math.min(cols.length, values.length); i++) {
+            row[String(cols[i] == null ? ("col" + i) : cols[i])] = values[i];
+          }
+        } else {
+          row.keys = keyValues;
+          row.values = measureValues;
+        }
+
+        rows.push(row);
+      });
+
+      return rows;
+    }
+
+    function summarizeRows(rows) {
+      var columns = {};
+      rows.forEach(function (row) {
+        Object.keys(row || {}).forEach(function (key) {
+          var value = row[key];
+          if (value === null || value === undefined || value === "") return;
+          var text = String(value);
+          if (!columns[key]) columns[key] = {};
+          columns[key][text] = (columns[key][text] || 0) + 1;
+        });
+      });
+
+      var summary = {};
+      Object.keys(columns).forEach(function (key) {
+        summary[key] = Object.keys(columns[key])
+          .map(function (value) { return { value: value, count: columns[key][value] }; })
+          .sort(function (a, b) { return b.count - a.count; })
+          .slice(0, 30);
+      });
+      return summary;
+    }
+
+    function setFilterAsync(api, guid, values) {
+      var setter = api.setFilterSelectedValues || api.SetFilterSelectedValues;
+      if (typeof setter !== "function") return Promise.resolve(false);
+
+      return new Promise(function (resolve) {
+        var finished = false;
+        function done(ok) {
+          if (finished) return;
+          finished = true;
+          setTimeout(function () { resolve(ok); }, 650);
+        }
+
+        try {
+          setter.call(api, guid, values, function () { done(true); });
+          setTimeout(function () { done(true); }, 1600);
+        } catch (_) {
+          done(false);
+        }
+      });
+    }
+
     function collectDashboardContext(question) {
       if (typeof visApi !== "function") {
         return Promise.resolve(JSON.stringify({ error: "visApi() недоступен", ownWidgetData: dashboardData }));
@@ -1054,6 +1140,7 @@
 
         var sheets = dashboard && Array.isArray(dashboard.sheets) ? dashboard.sheets : [];
         var widgetIndex = [];
+        var rawByGuid = {};
         var sheetIndex = [];
 
         sheets.forEach(function (sheet, si) {
@@ -1070,6 +1157,7 @@
 
           ws.forEach(function (widget, wi) {
             var guid = getGuid(widget);
+            if (guid) rawByGuid[guid] = widget;
             widgetIndex.push({
               guid: guid,
               title: getTitle(widget),
@@ -1084,6 +1172,8 @@
 
         var q = normalizeSearchText(question);
         var tokens = questionTokens(question);
+        var entityHint = extractEntityHint(question);
+        var strongTokens = strongEntityTokens(question);
 
         var explicitSheets = sheetIndex.filter(function (sheet) {
           var sn = normalizeSearchText(sheet.name);
@@ -1091,54 +1181,51 @@
         });
 
         var aiWidgetGuid = w && w.general ? String(w.general.guid || w.general.renderTo || "") : "";
-        var nonDecorative = widgetIndex.filter(function (item) {
+        var usableWidgets = widgetIndex.filter(function (item) {
           if (!item.guid) return false;
           if (aiWidgetGuid && item.guid === aiWidgetGuid) return false;
-          return !/imagewidget|textwidget/i.test(item.type);
+          return !/imagewidget/i.test(item.type);
         });
 
         var pool;
         if (explicitSheets.length) {
           var sheetGuids = {};
-          explicitSheets.forEach(function (s) { sheetGuids[s.guid] = true; });
-          pool = nonDecorative.filter(function (item) { return !!sheetGuids[item.sheetGuid]; });
+          explicitSheets.forEach(function (sheet) { sheetGuids[sheet.guid] = true; });
+          pool = usableWidgets.filter(function (item) { return !!sheetGuids[item.sheetGuid]; });
         } else {
-          var currentPool = nonDecorative.filter(function (item) { return item.current; });
-          pool = currentPool.length ? currentPool : nonDecorative;
+          var currentPool = usableWidgets.filter(function (item) { return item.current; });
+          pool = currentPool.length ? currentPool : usableWidgets;
         }
-
-        var scored = pool.map(function (item) {
-          var hay = normalizeSearchText([item.title, item.type, item.sheet, item.guid].join(" "));
-          var score = item.current ? 1 : 0;
-          tokens.forEach(function (token) {
-            if (hay.indexOf(token) >= 0) score += 5;
-          });
-          if (item.guid && q.indexOf(item.guid.toLowerCase()) >= 0) score += 50;
-          return { item: item, score: score };
-        });
-
-        scored.sort(function (a, b) { return b.score - a.score; });
-
-        var broadSearch = tokens.length > 0;
-        var selected = broadSearch
-          ? scored.slice(0, explicitSheets.length ? Math.min(scored.length, 40) : 18).map(function (x) { return x.item; })
-          : scored.slice(0, 12).map(function (x) { return x.item; });
 
         var dataGetter = api.getWidgetDataByGuid || api.GetWidgetDataByGuid;
         var selectedGetter = api.getSelectedValues || api.GetSelectedValues;
+        var widgetGetter = api.getWidgetByGuid || api.GetWidgetByGuid;
 
-        var dataPromises = selected.map(function (info) {
-          var selectedValues = null;
-          if (/filter/i.test(info.type) && typeof selectedGetter === "function") {
-            try {
-              selectedValues = selectedGetter.call(api, info.guid);
-            } catch (_) {}
+        function getSelected(guid) {
+          if (typeof selectedGetter !== "function") return [];
+          try {
+            var value = selectedGetter.call(api, guid);
+            return Array.isArray(value) ? value : [];
+          } catch (_) {
+            return [];
           }
+        }
+
+        function getData(info) {
+          var selectedValues = /filter/i.test(info.type) ? getSelected(info.guid) : null;
+          var runtime = null;
+          if (typeof widgetGetter === "function" && info.current) {
+            try { runtime = widgetGetter.call(api, info.guid); } catch (_) {}
+          }
+
+          var rawSummary = compactPrimitiveText(rawByGuid[info.guid], 0).trim().slice(0, 3000);
 
           if (typeof dataGetter !== "function") {
             return Promise.resolve({
               info: info,
               selectedValues: selectedValues,
+              rawSummary: rawSummary,
+              runtime: safeSnapshot(runtime, 0, []),
               error: "getWidgetDataByGuid() недоступен",
               relevance: selectedValues && selectedValues.length ? 15 : 0
             });
@@ -1148,82 +1235,175 @@
             .then(function () { return dataGetter.call(api, info.guid); })
             .then(function (data) {
               var targeted = targetedDataSnapshot(data, question);
+              var rows = extractRowsForAi(data, explicitSheets.length ? 160 : 80);
+              var rowSummary = summarizeRows(rows);
+
               var relevance = targeted.matchCount ? targeted.matches[0].score : 0;
               if (selectedValues && selectedValues.length) relevance = Math.max(relevance, 15);
+
+              var hay = normalizeSearchText(
+                [info.title, info.type, info.sheet, rawSummary, compactPrimitiveText(runtime, 0)].join(" ")
+              );
+              tokens.forEach(function (token) {
+                if (hay.indexOf(token) >= 0) relevance += 3;
+              });
+
               return {
                 info: info,
                 selectedValues: selectedValues,
+                rawSummary: rawSummary,
+                runtime: safeSnapshot(runtime, 0, []),
                 relevance: relevance,
-                data: targeted
+                data: targeted,
+                rows: rows,
+                columnSummary: rowSummary
               };
             })
             .catch(function (e) {
               return {
                 info: info,
                 selectedValues: selectedValues,
+                rawSummary: rawSummary,
+                runtime: safeSnapshot(runtime, 0, []),
                 relevance: selectedValues && selectedValues.length ? 15 : 0,
                 error: e && e.message ? e.message : String(e)
               };
             });
-        });
+        }
 
-        return Promise.all(dataPromises).then(function (allWidgetData) {
-          allWidgetData.sort(function (a, b) { return (b.relevance || 0) - (a.relevance || 0); });
+        function findAndApplyEntityFilter() {
+          if (!entityHint || !explicitSheets.length || typeof dataGetter !== "function") {
+            return Promise.resolve({ applied: false });
+          }
 
-          var matched = allWidgetData.filter(function (x) { return (x.relevance || 0) > 0; });
-          var important = allWidgetData.filter(function (x) {
-            return /userwidget/i.test(x.info && x.info.type || "") ||
-              (x.selectedValues && x.selectedValues.length);
+          var filters = pool.filter(function (item) {
+            return /filter/i.test(item.type);
           });
 
-          var seenSend = {};
-          var dataToSend = [];
-          matched.concat(important).concat(allWidgetData).forEach(function (x) {
-            var key = x.info && x.info.guid ? x.info.guid : "";
-            if (!key || seenSend[key] || dataToSend.length >= 18) return;
-            seenSend[key] = true;
-            dataToSend.push(x);
+          return Promise.all(filters.map(function (filterInfo) {
+            return Promise.resolve()
+              .then(function () { return dataGetter.call(api, filterInfo.guid); })
+              .then(function (data) {
+                var targeted = targetedDataSnapshot(data, question);
+                var best = targeted.matches && targeted.matches.length ? targeted.matches[0] : null;
+                var titleBonus = /наименование.*объект|объект/i.test(normalizeSearchText(filterInfo.title)) ? 20 : 0;
+                return {
+                  info: filterInfo,
+                  targeted: targeted,
+                  score: best ? best.score + titleBonus : 0,
+                  best: best
+                };
+              })
+              .catch(function () {
+                return { info: filterInfo, score: 0, best: null };
+              });
+          })).then(function (candidates) {
+            candidates.sort(function (a, b) { return b.score - a.score; });
+            var winner = candidates[0];
+            if (!winner || !winner.best || winner.score <= 0) {
+              return { applied: false, reason: "Фильтр с объектом не найден" };
+            }
+
+            var valueObj = winner.best.value || {};
+            var values = Array.isArray(valueObj.formattedValues) && valueObj.formattedValues.length
+              ? valueObj.formattedValues
+              : Array.isArray(valueObj.values) && valueObj.values.length
+                ? valueObj.values
+                : Array.isArray(valueObj.formattedKeys) && valueObj.formattedKeys.length
+                  ? valueObj.formattedKeys
+                  : Array.isArray(valueObj.keys) ? valueObj.keys : [];
+
+            var filterValue = values.length ? String(values[0]) : entityHint;
+            var previous = getSelected(winner.info.guid);
+
+            return setFilterAsync(api, winner.info.guid, [[filterValue]]).then(function (ok) {
+              return {
+                applied: !!ok,
+                guid: winner.info.guid,
+                title: winner.info.title,
+                value: filterValue,
+                previous: previous
+              };
+            });
+          });
+        }
+
+        return findAndApplyEntityFilter().then(function (filterAction) {
+          var scored = pool.map(function (item) {
+            var rawSummary = compactPrimitiveText(rawByGuid[item.guid], 0);
+            var hay = normalizeSearchText([item.title, item.type, item.sheet, rawSummary, item.guid].join(" "));
+            var score = item.current ? 1 : 0;
+
+            tokens.forEach(function (token) {
+              if (hay.indexOf(token) >= 0) score += 5;
+            });
+            if (item.guid && q.indexOf(item.guid.toLowerCase()) >= 0) score += 50;
+            if (/filter|userwidget|textwidget|datagrid/i.test(item.type)) score += 2;
+
+            return { item: item, score: score };
           });
 
-          var ownTargeted = targetedDataSnapshot(w && w.data ? w.data.primaryData : null, question);
+          scored.sort(function (a, b) { return b.score - a.score; });
 
-          var context = {
-            dashboard: {
-              guid: getGuid(dashboard),
-              name: smartText(dashboard.name, 0),
-              sheets: sheetIndex
-            },
-            requestedSheet: explicitSheets.map(function (x) { return x.name; }),
-            entityHint: extractEntityHint(question),
-            strongEntityTokens: strongEntityTokens(question),
-            queryTokens: tokens,
-            allWidgets: widgetIndex,
-            searchedWidgetCount: selected.length,
-            matchedWidgetCount: matched.length,
-            selectedWidgetData: dataToSend,
-            ownWidgetData: ownTargeted,
-            note:
-              "Поиск по объекту использует сильные токены названия объекта, например названия станций. " +
-              "Также передаются аналитические UserWidget и текущие выбранные значения фильтров. " +
-              "Для таблиц Visiology getWidgetDataByGuid может возвращать неполные данные, поэтому выводы по таблицам требуют подтверждения совпадениями."
-          };
+          var selected = explicitSheets.length
+            ? scored.slice(0, Math.min(scored.length, 40)).map(function (x) { return x.item; })
+            : scored.slice(0, 20).map(function (x) { return x.item; });
 
-          try {
-            fetch(endpoint + "/inspect", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+          return Promise.all(selected.map(getData)).then(function (allWidgetData) {
+            var restorePromise = Promise.resolve();
+            if (filterAction.applied) {
+              restorePromise = setFilterAsync(api, filterAction.guid, filterAction.previous || []);
+            }
+
+            return restorePromise.then(function () {
+              allWidgetData.sort(function (a, b) { return (b.relevance || 0) - (a.relevance || 0); });
+
+              var matched = allWidgetData.filter(function (x) { return (x.relevance || 0) > 0; });
+              var ownTargeted = targetedDataSnapshot(w && w.data ? w.data.primaryData : null, question);
+
+              var dataToSend;
+              if (explicitSheets.length) {
+                dataToSend = allWidgetData.slice(0, 30);
+              } else {
+                dataToSend = matched.length ? matched.slice(0, 16) : allWidgetData.slice(0, 12);
+              }
+
+              var context = {
+                dashboard: {
+                  guid: getGuid(dashboard),
+                  name: smartText(dashboard.name, 0),
+                  sheets: sheetIndex
+                },
+                requestedSheet: explicitSheets.map(function (x) { return x.name; }),
+                entityHint: entityHint,
+                strongEntityTokens: strongTokens,
+                queryTokens: tokens,
+                filterAction: filterAction,
+                allWidgets: widgetIndex,
+                searchedWidgetCount: selected.length,
+                matchedWidgetCount: matched.length,
+                selectedWidgetData: dataToSend,
+                ownWidgetData: ownTargeted,
+                note:
+                  "Если в вопросе указана сущность и найден соответствующий фильтр, VISI AI временно применяет фильтр, " +
+                  "считывает данные виджетов целевого листа и затем восстанавливает прежнее значение фильтра. " +
+                  "Для каждого виджета передаются строки rows и агрегированные значения columnSummary. " +
+                  "TextWidget и UserWidget также анализируются."
+              };
+
+              postDiagnostic({
                 capturedAt: new Date().toISOString(),
                 kind: "question-context",
+                version: version,
                 question: question,
                 context: context
-              })
-            }).catch(function () {});
-          } catch (_) {}
+              });
 
-          var json = JSON.stringify(context);
-          if (json.length > 180000) json = json.slice(0, 180000) + "\n[TRUNCATED]";
-          return json;
+              var json = JSON.stringify(context);
+              if (json.length > 260000) json = json.slice(0, 260000) + "\n[TRUNCATED]";
+              return json;
+            });
+          });
         });
       }).catch(function (e) {
         return JSON.stringify({
